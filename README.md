@@ -19,7 +19,7 @@ This API provides access to token holder data for Super Tokens across multiple E
 ### Get Token Holders
 
 ```
-GET /v1/tokens/{tokenAddress}/holders?chainId={chainId}&limit={limit}&offset={offset}&minBalanceWei={minBalanceWei}
+GET /v0/tokens/{tokenAddress}/holders?chainId={chainId}&limit={limit}&offset={offset}&minBalanceWei={minBalanceWei}
 ```
 
 **Path Parameters:**

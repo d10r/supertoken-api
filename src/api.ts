@@ -43,8 +43,8 @@ function validateChainId(req: express.Request, res: express.Response, next: expr
   next();
 }
 
-// GET /v1/tokens/:tokenAddress/holders
-router.get('/v1/tokens/:tokenAddress/holders',
+// GET /v0/tokens/:tokenAddress/holders
+router.get('/v0/tokens/:tokenAddress/holders',
   validateTokenAddress,
   validateChainId,
   (req, res) => {
