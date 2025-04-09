@@ -27,7 +27,7 @@ GET /v0/tokens/{tokenAddress}/holders?chainId={chainId}&limit={limit}&offset={of
 
 **Query Parameters:**
 - `chainId` (required): The EVM chain ID where the token exists (e.g., `1` for Ethereum Mainnet)
-- `limit` (optional): Maximum number of holders to return per request (default: 100, max: 1000)
+- `limit` (optional): Maximum number of holders to return per request (default: 100, max: 1000000)
 - `offset` (optional): Number of records to skip for pagination (default: 0)
 - `minBalanceWei` (optional): Filter holders with a minimum token balance (in wei, default: 0)
 
