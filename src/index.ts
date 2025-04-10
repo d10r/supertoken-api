@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import { app } from './api';
-import { takeSnapshot } from './snapshot';
+import { takeSnapshot, updateTokenHoldersCache } from './snapshot';
 import { loadTokenHolders } from './utils';
 import { extendedSuperTokenList } from '@superfluid-finance/tokenlist';
 import sfMeta from '@superfluid-finance/metadata';
@@ -75,30 +75,55 @@ function getNetworkName(chainId: number): string {
 async function loadInitialData(): Promise<void> {
   console.log('Loading initial data from files...');
   
+  // Track tokens that need updates
+  const tokensToUpdate: Array<{ networkName: string, address: string, symbol: string, dataAge: number }> = [];
+  
+  // First, load all data from files
   for (const [chainIdStr, tokens] of Object.entries(tokenConfig)) {
     const chainId = parseInt(chainIdStr);
     const networkName = getNetworkName(chainId);
     
     for (const token of tokens) {
-      // debugging
-      if (token.symbol !== 'HNYx') {
+      // if env var DEBUG_ONLY_TOKEN is set, only process this token
+      if (process.env.DEBUG_ONLY_TOKEN && token.symbol !== process.env.DEBUG_ONLY_TOKEN) {
         continue;
       }
+      
+      // Load data from file
       const data = loadTokenHolders(networkName, token.address);
       console.log(`Loaded ${data.holders.length} holders for ${networkName}:${token.address} (${token.symbol})`);
+      
+      // Add the loaded data to the in-memory cache regardless of age
+      // This ensures API has data available immediately
+      updateTokenHoldersCache(networkName, token.address, data);
       
       // Check if data is stale and needs to be updated
       const now = Math.floor(Date.now() / 1000);
       const dataAge = now - Math.floor(data.updatedAt / 1000);
       
-      if (data.holders.length === 0 || dataAge > UPDATE_INTERVAL) {
-        console.log(`Data for ${networkName}:${token.address} (${token.symbol}) is stale (${dataAge}s old), updating...`);
-        await takeSnapshot(networkName, token.address, RPC_BATCH_SIZE);
+      if (dataAge > UPDATE_INTERVAL) {
+        console.log(`Data for ${networkName}:${token.address} (${token.symbol}) is stale (${dataAge}s old), will update...`);
+        tokensToUpdate.push({ 
+          networkName, 
+          address: token.address, 
+          symbol: token.symbol,
+          dataAge 
+        });
       } else {
         console.log(`Using cached data for ${networkName}:${token.address} (${token.symbol}) (${dataAge}s old)`);
       }
     }
   }
+  
+  // After loading all data, update stale data in the background
+  console.log(`All data loaded from files. Updating ${tokensToUpdate.length} stale tokens...`);
+  
+  for (const token of tokensToUpdate) {
+    console.log(`Updating ${token.networkName}:${token.address} (${token.symbol}) - ${token.dataAge}s old`);
+    await takeSnapshot(token.networkName, token.address, RPC_BATCH_SIZE);
+  }
+  
+  console.log('Initial data loading and updates complete');
 }
 
 // Take snapshots for all tokens
@@ -117,13 +142,13 @@ async function takeSnapshots(): Promise<void> {
 
 // Initialize and start server
 async function start(): Promise<void> {
-  // Load initial data and update if stale
-  await loadInitialData();
-  
-  // Start the server
+  // Start the server first so it's available while data is loading
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
+  
+  // Load initial data and update if stale
+  await loadInitialData();
   
   // Setup periodic updates with setInterval
   console.log(`Scheduling snapshots every ${UPDATE_INTERVAL} seconds`);

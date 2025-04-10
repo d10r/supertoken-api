@@ -170,4 +170,15 @@ export function getTokenHolders(
     blockNumber: 0,
     holders: []
   };
+}
+
+// Update the token holders cache with new data
+export function updateTokenHoldersCache(
+  chainName: string,
+  tokenAddress: string,
+  data: TokenHolderSnapshot
+): void {
+  const key = `${chainName}:${tokenAddress.toLowerCase()}`;
+  tokenHoldersCache[key] = data;
+  console.log(`Updated in-memory cache for ${chainName}:${tokenAddress}`);
 } 

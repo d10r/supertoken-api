@@ -191,7 +191,6 @@ export function getNetFlowRate(snapshot: AccountTokenSnapshot): string {
   for (const poolMembership of snapshot.account.poolMemberships) {
     netFlowRate += BigInt(poolMembership.syncedPerUnitFlowRate) * BigInt(poolMembership.units);
   }
-  console.log(`Net flow rate for ${snapshot.account.id}: ${netFlowRate.toString()}`);
   return netFlowRate.toString();
 }
 

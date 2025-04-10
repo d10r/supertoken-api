@@ -3,6 +3,7 @@ import sfMeta from '@superfluid-finance/metadata';
 import { getTokenHolders } from './snapshot';
 import { getNetwork } from './utils';
 import { extendedSuperTokenList } from '@superfluid-finance/tokenlist';
+import { isAddress } from 'viem';
 
 // Create Express router
 export const router = express.Router();
@@ -36,28 +37,17 @@ superTokens.forEach(token => {
   }
 });
 
-// Middleware to validate token address format
-function validateTokenAddress(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const tokenAddress = req.params.tokenAddress;
-  if (!tokenAddress) {
-    return res.status(400).json({
-      error: 'Token address is required'
-    });
-  }
-  
-  // Validate token address format
-  if (!tokenAddress.match(/^0x[a-fA-F0-9]{40}$/)) {
-    return res.status(400).json({
-      error: 'Invalid token address format'
-    });
-  }
-  
-  next();
-}
-
-// Middleware to validate chain ID
-function validateChainId(req: express.Request, res: express.Response, next: express.NextFunction) {
+// Middleware to validate token parameter (address or symbol)
+function validateToken(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const tokenParam = req.params.tokenAddress;
   const chainId = req.query.chainId;
+  
+  if (!tokenParam) {
+    return res.status(400).json({
+      error: 'Token address or symbol is required'
+    });
+  }
+  
   if (!chainId) {
     return res.status(400).json({
       error: 'chainId query parameter is required'
@@ -79,12 +69,30 @@ function validateChainId(req: express.Request, res: express.Response, next: expr
     });
   }
   
-  // Check if the token exists in our tokenConfig for this chain
-  const tokenAddress = req.params.tokenAddress.toLowerCase();
-  if (!tokenConfig[chainIdNum].some(token => token.address === tokenAddress)) {
-    return res.status(400).json({
-      error: `Token ${tokenAddress} is not a recognized SuperToken on chain ${chainId}`
-    });
+  if (isAddress(tokenParam, { strict: false })) {
+    // validate if it exists in our tokenConfig for this chain
+    const tokenAddress = tokenParam.toLowerCase();
+    if (!tokenConfig[chainIdNum].some(token => token.address === tokenAddress)) {
+      return res.status(400).json({
+        error: `Token ${tokenAddress} is not a recognized SuperToken on chain ${chainId}`
+      });
+    }
+    
+    // Store the address in lowercase for later use
+    req.params.tokenAddress = tokenAddress;
+  } else {
+    // It's a symbol, look up the address for this chain
+    const tokenInfo = tokenConfig[chainIdNum].find(token => token.symbol === tokenParam);
+    
+    if (!tokenInfo) {
+      return res.status(400).json({
+        error: `Token symbol ${tokenParam} is not a recognized SuperToken on chain ${chainId}`
+      });
+    }
+    
+    // Store the address for later use
+    req.params.tokenAddress = tokenInfo.address;
+    console.log(`Resolved symbol ${tokenParam} to address ${tokenInfo.address} on chain ${chainIdNum}`);
   }
   
   next();
@@ -92,10 +100,9 @@ function validateChainId(req: express.Request, res: express.Response, next: expr
 
 // GET /v0/tokens/:tokenAddress/holders
 router.get('/v0/tokens/:tokenAddress/holders',
-  validateTokenAddress,
-  validateChainId,
+  validateToken,
   (req, res) => {
-    const tokenAddress = req.params.tokenAddress.toLowerCase();
+    const tokenAddress = req.params.tokenAddress; // Already validated and normalized in middleware
     const chainId = parseInt(req.query.chainId as string);
     
     // Get query parameters with defaults
@@ -125,9 +132,14 @@ router.get('/v0/tokens/:tokenAddress/holders',
     // Get token holders
     const result = getTokenHolders(networkName, tokenAddress, limit, offset, minBalanceWei);
     
+    // Get the token symbol for the response
+    const tokenInfo = tokenConfig[chainId].find(t => t.address === tokenAddress);
+    const tokenSymbol = tokenInfo ? tokenInfo.symbol : '';
+    
     // Return response
     res.json({
       tokenAddress,
+      tokenSymbol,
       chainId,
       blockNumber: result.blockNumber,
       limit,
