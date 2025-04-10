@@ -2,7 +2,10 @@
   "name": "supertoken-api",
   "version": "1.0.0",
   "description": "API for getting Super Token related state information",
-  "repository": "https://github.com/d10r/supertoken-api",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/d10r/supertoken-api"
+  },
   "license": "AGPL-3.0-or-later",
   "author": "d10r",
   "type": "commonjs",
