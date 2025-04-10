@@ -81,7 +81,7 @@ async function loadInitialData(): Promise<void> {
     
     for (const token of tokens) {
       // debugging
-      if (token.symbol !== 'COWx') {
+      if (token.symbol !== 'HNYx') {
         continue;
       }
       const data = loadTokenHolders(networkName, token.address);

@@ -2,15 +2,16 @@ import {
   getSubgraphUrl,
   queryAllPages,
   saveTokenHolders,
-  calculateHolderBalance,
+  getNetFlowRate,
   createRpcClient,
   batchFetchBalances,
   TokenHolder,
+  TokenHolderSnapshot,
   AccountTokenSnapshot
 } from './utils';
 
 // In-memory cache of token holders
-const tokenHoldersCache: Record<string, { updatedAt: number, holders: TokenHolder[] }> = {};
+const tokenHoldersCache: Record<string, TokenHolderSnapshot> = {};
 
 // Take a snapshot of token holders for a specific token on a specific chain
 export async function takeSnapshot(
@@ -22,43 +23,28 @@ export async function takeSnapshot(
   
   try {
     const subgraphUrl = getSubgraphUrl(chainName);
-    const currentTimestamp = Math.floor(Date.now() / 1000);
     
-    // Fetch all token holders from the subgraph
+    // Fetch all token holders from the subgraph - we still need this for netFlowRate info
     console.log(`Querying subgraph for account token snapshots...`);
     const snapshots = await queryAllPages<AccountTokenSnapshot>(
       // Query function with pagination
-      (lastId) => {
-        const whereClause = lastId 
-          ? `{token: "${tokenAddress.toLowerCase()}", id_gt: "${lastId}"}`
-          : `{token: "${tokenAddress.toLowerCase()}"}`;
-          
-        return `{
-          accountTokenSnapshots(
-            first: 1000,
-            where: ${whereClause},
-            orderBy: id,
-            orderDirection: asc
-          ) {
+      (lastId) => `{
+        accountTokenSnapshots(
+          first: 1000,
+          where: {token: "${tokenAddress.toLowerCase()}", id_gt: "${lastId}"},
+          orderBy: id,
+          orderDirection: asc
+        ) {
+          totalNetFlowRate
+          account {
             id
-            totalNetFlowRate
-            account {
-              id
-              poolMemberships {
-                id
-                isConnected
-                pool {
-                  id
-                  perUnitFlowRate
-                }
-                units
-              }
+            poolMemberships(first: 256 where: {isConnected: true pool_: {token: "${tokenAddress.toLowerCase()}"}}) {
+              units
+              syncedPerUnitFlowRate
             }
-            updatedAtTimestamp
-            balanceUntilUpdatedAt
           }
-        }`;
-      },
+        }
+      }`,
       // Extract items from response
       (response) => response.data.data.accountTokenSnapshots || [],
       // Return the item as is
@@ -68,11 +54,11 @@ export async function takeSnapshot(
     
     console.log(`\nFound ${snapshots.length} account token snapshots`);
     
-    // Calculate balances from subgraph data
-    console.log(`Calculating balances from subgraph data...`);
-    const calculatedHolders = snapshots.map(snapshot => 
-      calculateHolderBalance(snapshot, currentTimestamp)
-    );
+    // Create flow rate map - we only need flow rates from the subgraph data
+    const flowRateMap: Record<string, string> = {};
+    snapshots.forEach(snapshot => {
+      flowRateMap[snapshot.account.id] = getNetFlowRate(snapshot);
+    });
     
     // Count accounts with and without pool memberships
     const accountsWithPools = snapshots.filter(s => 
@@ -88,50 +74,70 @@ export async function takeSnapshot(
     const rpcClient = createRpcClient(chainName);
     
     // Get all unique account addresses
-    const allAccounts = calculatedHolders.map(h => h.address);
+    const allAccounts = snapshots.map(s => s.account.id);
     
-    // Fetch real balances via RPC
+    // Fetch real balances via RPC - this is now the only source of balance data
     console.log(`Fetching real balances via RPC in batches of ${rpcBatchSize}...`);
-    const { balances: realBalances, stats } = await batchFetchBalances(
-      rpcClient,
-      tokenAddress,
-      allAccounts,
-      rpcBatchSize
-    );
-    
-    // Log RPC batch stats
-    console.log(`\nRPC Batch Statistics:`);
-    console.log(`Total batches: ${stats.batchCount}`);
-    console.log(`Total time: ${stats.totalTime.toFixed(2)}ms`);
-    console.log(`Average time per batch: ${(stats.totalTime / stats.batchCount).toFixed(2)}ms`);
-    console.log(`Max batch time: ${stats.maxBatchTime.toFixed(2)}ms`);
-    
-    // Update holders with real balances from RPC
-    const holders = calculatedHolders.map(holder => ({
-      ...holder,
-      balance: realBalances[holder.address] || holder.balance
-    }));
-    
-    // Sort holders by balance descending
-    holders.sort((a, b) => {
-      const balanceA = BigInt(a.balance);
-      const balanceB = BigInt(b.balance);
-      if (balanceB > balanceA) return 1;
-      if (balanceB < balanceA) return -1;
-      return 0;
-    });
-    
-    console.log(`\nFinished processing ${holders.length} holders for ${chainName}:${tokenAddress}`);
-    
-    // Update cache
-    const key = `${chainName}:${tokenAddress.toLowerCase()}`;
-    tokenHoldersCache[key] = {
-      updatedAt: Date.now(),
-      holders
-    };
-    
-    // Save to file
-    saveTokenHolders(chainName, tokenAddress, holders);
+    try {
+      const { balances: realBalances, blockNumber, stats } = await batchFetchBalances(
+        rpcClient,
+        tokenAddress,
+        allAccounts,
+        rpcBatchSize
+      );
+      
+      // Log RPC batch stats
+      console.log(`\nRPC Batch Statistics:`);
+      console.log(`Block number: ${blockNumber}`);
+      console.log(`Total batches: ${stats.batchCount}`);
+      console.log(`Total time: ${stats.totalTime.toFixed(2)}ms`);
+      console.log(`Average time per batch: ${(stats.totalTime / stats.batchCount).toFixed(2)}ms`);
+      console.log(`Max batch time: ${stats.maxBatchTime.toFixed(2)}ms`);
+      console.log(`Total retries: ${stats.retriesCount}`);
+      
+      // Create holder objects with balances from RPC and flow rates from the subgraph
+      const holders: TokenHolder[] = allAccounts.map(address => {
+        const balance = realBalances[address] || "0";
+        return {
+          address,
+          balance,
+          netFlowRate: flowRateMap[address] || "0"
+        };
+      });
+      
+      // Remove accounts with zero balance
+      const nonZeroHolders = holders.filter(h => h.balance !== "0");
+      console.log(`Removed ${holders.length - nonZeroHolders.length} accounts with zero balance`);
+      
+      // Sort holders by balance descending
+      nonZeroHolders.sort((a, b) => {
+        const balanceA = BigInt(a.balance);
+        const balanceB = BigInt(b.balance);
+        if (balanceB > balanceA) return 1;
+        if (balanceB < balanceA) return -1;
+        return 0;
+      });
+      
+      console.log(`\nFinished processing ${nonZeroHolders.length} holders for ${chainName}:${tokenAddress}`);
+      
+      // Create snapshot data
+      const snapshot: TokenHolderSnapshot = {
+        updatedAt: Date.now(),
+        blockNumber,
+        holders: nonZeroHolders
+      };
+      
+      // Update cache
+      const key = `${chainName}:${tokenAddress.toLowerCase()}`;
+      tokenHoldersCache[key] = snapshot;
+      
+      // Save to file
+      saveTokenHolders(chainName, tokenAddress, nonZeroHolders, blockNumber);
+    } catch (error) {
+      console.error(`Error fetching balances for ${chainName}:${tokenAddress}:`, error);
+      console.error(`Snapshot failed. Will try again on next update.`);
+      // Note: We're not crashing the application here, just logging the error
+    }
   } catch (error) {
     console.error(`Error taking snapshot for ${chainName}:${tokenAddress}:`, error);
   }
@@ -144,7 +150,7 @@ export function getTokenHolders(
   limit: number = 100,
   offset: number = 0,
   minBalanceWei: string = '1'
-): { updatedAt: number, holders: TokenHolder[] } {
+): TokenHolderSnapshot {
   const key = `${chainName}:${tokenAddress.toLowerCase()}`;
   const cached = tokenHoldersCache[key];
   
@@ -155,12 +161,14 @@ export function getTokenHolders(
       
     return {
       updatedAt: cached.updatedAt,
+      blockNumber: cached.blockNumber,
       holders: filteredHolders
     };
   }
   
   return {
     updatedAt: 0,
+    blockNumber: 0,
     holders: []
   };
 } 

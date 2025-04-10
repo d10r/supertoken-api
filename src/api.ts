@@ -129,7 +129,7 @@ router.get('/v0/tokens/:tokenAddress/holders',
     res.json({
       tokenAddress,
       chainId,
-      updatedAt: result.updatedAt,
+      blockNumber: result.blockNumber,
       limit,
       offset,
       total: result.holders.length,

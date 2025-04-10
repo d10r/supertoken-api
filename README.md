@@ -37,7 +37,7 @@ GET /v0/tokens/{tokenAddress}/holders?chainId={chainId}&limit={limit}&offset={of
 {
   "tokenAddress": "0xa69f80524381275a7ffdb3ae01c54150644c8792",
   "chainId": 1,
-  "updatedAt": 1675234567890,
+  "blockNumber": 17000000,
   "limit": 10,
   "offset": 0,
   "total": 5,
@@ -45,8 +45,7 @@ GET /v0/tokens/{tokenAddress}/holders?chainId={chainId}&limit={limit}&offset={of
     {
       "address": "0x1234...",
       "balance": "100000000000000000000",
-      "netFlowRate": "1000000000",
-      "lastUpdatedAt": 1675234567
+      "netFlowRate": "1000000000"
     },
     // ...more holders
   ]
