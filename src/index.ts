@@ -133,7 +133,7 @@ async function loadInitialData(): Promise<void> {
     
     for (let i = 0; i < tokensToUpdate.length; i++) {
       const token = tokensToUpdate[i];
-      console.log(`[${i+1}/${tokensToUpdate.length}] Updating ${token.symbol} on ${token.networkName}`);
+      console.log(`\n[${i+1}/${tokensToUpdate.length}] Updating ${token.symbol} on ${token.networkName}`);
       await takeSnapshot(token.networkName, token.address, RPC_BATCH_SIZE);
     }
     

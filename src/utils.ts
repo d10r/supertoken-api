@@ -27,8 +27,9 @@ export interface TokenHolderSnapshot {
 export interface AccountTokenSnapshot {
   id: string;
   totalNetFlowRate: string;
-  updatedAtTimestamp: string;
   balanceUntilUpdatedAt: string;
+  updatedAtTimestamp: string;
+  updatedAtBlockNumber: string;
   account: {
     id: string;
     poolMemberships: {

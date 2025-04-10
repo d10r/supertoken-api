@@ -37,6 +37,8 @@ export async function takeSnapshot(
         ) {
           id
           totalNetFlowRate
+          balanceUntilUpdatedAt
+          updatedAtBlockNumber
           account {
             id
             poolMemberships(first: 256 where: {isConnected: true pool_: {token: "${tokenAddress.toLowerCase()}"}}) {
@@ -57,6 +59,10 @@ export async function takeSnapshot(
     
     // Create flow rate map - we only need flow rates from the subgraph data
     const flowRateMap: Record<string, string> = {};
+    const accountsWithNonZeroFlowRate = snapshots.filter(snapshot => 
+      snapshot.totalNetFlowRate !== "0"
+    ).length;
+    
     snapshots.forEach(snapshot => {
       flowRateMap[snapshot.account.id] = getNetFlowRate(snapshot);
     });
@@ -67,66 +73,109 @@ export async function takeSnapshot(
     ).length;
     const accountsWithoutPools = snapshots.length - accountsWithPools;
     
-    console.log(`Accounts: ${snapshots.length} total (${accountsWithPools} with pools, ${accountsWithoutPools} without)`);
+    console.log(`Accounts: ${snapshots.length} total (${accountsWithPools} with pools, ${accountsWithoutPools} without, ${accountsWithNonZeroFlowRate} with non-zero flow rate)`);
     
     const rpcClient = createRpcClient(chainName);
     
-    // Get all unique account addresses
-    const allAccounts = snapshots.map(s => s.account.id);
+    // Determine which accounts need RPC balance verification and which can use subgraph data directly
+    const accountsNeedingRpc: string[] = [];
+    const subgraphBalances: Record<string, string> = {};
     
-    // Fetch real balances via RPC - this is now the only source of balance data
-    try {
-      const { balances: realBalances, blockNumber, stats } = await batchFetchBalances(
-        rpcClient,
-        tokenAddress,
-        allAccounts,
-        rpcBatchSize
-      );
+    // First, get current block number to compare with updatedAtBlockNumber
+    const currentBlockNumber = Number(await rpcClient.getBlockNumber());
+    
+    // Determine which accounts need RPC verification and which can use subgraph data
+    snapshots.forEach(snapshot => {
+      const account = snapshot.account.id;
+      const snapshotBlockNumber = Number(snapshot.updatedAtBlockNumber);
+      const hasNoFlowRate = snapshot.totalNetFlowRate === "0";
+      const hasNoPools = !snapshot.account.poolMemberships || snapshot.account.poolMemberships.length === 0;
       
-      // Log RPC batch stats
-      console.log(`Stats: block=${blockNumber}, batches=${stats.batchCount}, time=${stats.totalTime.toFixed(0)}ms`);
-      
-      // Create holder objects with balances from RPC and flow rates from the subgraph
-      const holders: TokenHolder[] = allAccounts.map(address => {
-        const balance = realBalances[address] || "0";
-        return {
-          address,
-          balance,
-          netFlowRate: flowRateMap[address] || "0"
-        };
-      });
-      
-      // Remove accounts with zero balance
-      const nonZeroHolders = holders.filter(h => h.balance !== "0");
-      console.log(`Results: ${nonZeroHolders.length} holders with non-zero balance (${holders.length - nonZeroHolders.length} removed)`);
-      
-      // Sort holders by balance descending
-      nonZeroHolders.sort((a, b) => {
-        const balanceA = BigInt(a.balance);
-        const balanceB = BigInt(b.balance);
-        if (balanceB > balanceA) return 1;
-        if (balanceB < balanceA) return -1;
-        return 0;
-      });
-      
-      // Create snapshot data
-      const snapshot: TokenHolderSnapshot = {
-        updatedAt: Date.now(),
-        blockNumber,
-        holders: nonZeroHolders
-      };
-      
-      // Update cache
-      const key = `${chainName}:${tokenAddress.toLowerCase()}`;
-      tokenHoldersCache[key] = snapshot;
-      
-      // Save to file
-      saveTokenHolders(chainName, tokenAddress, nonZeroHolders, blockNumber);
-      console.log(`Snapshot completed and saved.\n`);
-    } catch (error) {
-      console.error(`Error fetching balances: ${error instanceof Error ? error.message : String(error)}`);
-      console.error(`Snapshot failed. Will try again on next update.`);
+      // If the snapshot is current or older, has no flow rate, and no pool memberships, use subgraph data
+      if (snapshotBlockNumber <= currentBlockNumber && hasNoFlowRate && hasNoPools) {
+        subgraphBalances[account] = snapshot.balanceUntilUpdatedAt;
+      } else {
+        accountsNeedingRpc.push(account);
+      }
+    });
+    
+    console.log(`Using subgraph data for ${Object.keys(subgraphBalances).length} accounts, fetching ${accountsNeedingRpc.length} via RPC`);
+    
+    // Only fetch balances via RPC for accounts that need it
+    let rpcBalances: Record<string, string> = {};
+    let blockNumber = currentBlockNumber;
+    let stats = { totalTime: 0, batchCount: 0, maxBatchTime: 0 };
+    
+    // If we need RPC data, fetch it - abort on failure
+    if (accountsNeedingRpc.length > 0) {
+      try {
+        const rpcResult = await batchFetchBalances(
+          rpcClient,
+          tokenAddress,
+          accountsNeedingRpc,
+          rpcBatchSize
+        );
+        
+        rpcBalances = rpcResult.balances;
+        blockNumber = rpcResult.blockNumber;
+        stats = rpcResult.stats;
+        
+        // Log RPC batch stats
+        console.log(`Stats: block=${blockNumber}, batches=${stats.batchCount}, time=${stats.totalTime.toFixed(0)}ms`);
+      } catch (error) {
+        console.error(`Error fetching balances: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`Snapshot failed. Will keep previous data until next update.`);
+        // Abort the update for this token
+        return;
+      }
+    } else {
+      console.log(`No RPC queries needed for this token`);
     }
+    
+    // Combine balances from both sources
+    const combinedBalances: Record<string, string> = {
+      ...subgraphBalances,
+      ...rpcBalances
+    };
+    
+    // Create holder objects with balances from both sources and flow rates from the subgraph
+    const holders: TokenHolder[] = snapshots.map(snapshot => {
+      const address = snapshot.account.id;
+      const balance = combinedBalances[address] || "0";
+      return {
+        address,
+        balance,
+        netFlowRate: flowRateMap[address] || "0"
+      };
+    });
+    
+    // Remove accounts with zero balance
+    const nonZeroHolders = holders.filter(h => h.balance !== "0");
+    console.log(`Results: ${nonZeroHolders.length} holders with non-zero balance (${holders.length - nonZeroHolders.length} removed)`);
+    
+    // Sort holders by balance descending
+    nonZeroHolders.sort((a, b) => {
+      const balanceA = BigInt(a.balance);
+      const balanceB = BigInt(b.balance);
+      if (balanceB > balanceA) return 1;
+      if (balanceB < balanceA) return -1;
+      return 0;
+    });
+    
+    // Create snapshot data
+    const snapshot: TokenHolderSnapshot = {
+      updatedAt: Date.now(),
+      blockNumber,
+      holders: nonZeroHolders
+    };
+    
+    // Update cache
+    const key = `${chainName}:${tokenAddress.toLowerCase()}`;
+    tokenHoldersCache[key] = snapshot;
+    
+    // Save to file
+    saveTokenHolders(chainName, tokenAddress, nonZeroHolders, blockNumber);
+    console.log(`Snapshot completed and saved.`);
   } catch (error) {
     console.error(`Error taking snapshot: ${error instanceof Error ? error.message : String(error)}`);
   }
