@@ -14,10 +14,8 @@ const ERC20_ABI = parseAbi([
 export interface TokenHolder {
   address: string;
   balance: string;
-  claimableBalance: string;
   netFlowRate: string;
   lastUpdatedAt: number;
-  hasPoolMembership: boolean;
 }
 
 export interface AccountTokenSnapshot {
@@ -165,7 +163,6 @@ export function calculateHolderBalance(snapshot: AccountTokenSnapshot, currentTi
   
   // Start with balance at last update
   let balance = BigInt(balanceUntilUpdatedAt);
-  let claimableBalance = BigInt(0);
   
   // Add flow rate contribution if non-zero
   if (netFlowRate !== "0") {
@@ -185,20 +182,16 @@ export function calculateHolderBalance(snapshot: AccountTokenSnapshot, currentTi
       if (pms.isConnected) {
         // Connected pool memberships affect current balance
         balance += BigInt(perUnitFlowRate) * BigInt(units) * BigInt(deltaT);
-      } else {
-        // Non-connected pool memberships contribute to claimable balance
-        claimableBalance += BigInt(perUnitFlowRate) * BigInt(units) * BigInt(deltaT);
       }
+      // We're no longer tracking claimable balance
     }
   }
   
   return {
     address,
     balance: balance.toString(),
-    claimableBalance: claimableBalance.toString(),
     netFlowRate,
-    lastUpdatedAt: updatedAtTimestamp,
-    hasPoolMembership
+    lastUpdatedAt: updatedAtTimestamp
   };
 }
 

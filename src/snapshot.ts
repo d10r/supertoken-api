@@ -75,11 +75,13 @@ export async function takeSnapshot(
     );
     
     // Count accounts with and without pool memberships
-    const accountsWithPools = calculatedHolders.filter(h => h.hasPoolMembership);
-    const accountsWithoutPools = calculatedHolders.filter(h => !h.hasPoolMembership);
+    const accountsWithPools = snapshots.filter(s => 
+      s.account.poolMemberships && s.account.poolMemberships.length > 0
+    ).length;
+    const accountsWithoutPools = snapshots.length - accountsWithPools;
     
-    console.log(`Accounts with pool memberships: ${accountsWithPools.length}`);
-    console.log(`Accounts without pool memberships: ${accountsWithoutPools.length}`);
+    console.log(`Accounts with pool memberships: ${accountsWithPools}`);
+    console.log(`Accounts without pool memberships: ${accountsWithoutPools}`);
     
     // Create RPC client for this network
     console.log(`Creating RPC client for ${chainName}...`);

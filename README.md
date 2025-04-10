@@ -45,7 +45,6 @@ GET /v0/tokens/{tokenAddress}/holders?chainId={chainId}&limit={limit}&offset={of
     {
       "address": "0x1234...",
       "balance": "100000000000000000000",
-      "claimableBalance": "50000000000000000",
       "netFlowRate": "1000000000",
       "lastUpdatedAt": 1675234567
     },
