@@ -51,7 +51,10 @@ export function getRpcUrl(networkName: string): string {
 export function createRpcClient(networkName: string): PublicClient {
   const rpcUrl = getRpcUrl(networkName);
   return createPublicClient({
-    transport: http(rpcUrl)
+    transport: http(rpcUrl),
+    batch: {
+      multicall: true
+    }
   });
 }
 
