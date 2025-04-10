@@ -20,11 +20,11 @@ This API provides access to token holder data for Super Tokens across multiple E
 ### Get Token Holders
 
 ```
-GET /v0/tokens/{tokenAddress}/holders?chainId={chainId}&limit={limit}&offset={offset}&minBalanceWei={minBalanceWei}
+GET /v0/tokens/{tokenAddressOrSymbol}/holders?chainId={chainId}&limit={limit}&offset={offset}&minBalanceWei={minBalanceWei}
 ```
 
 **Path Parameters:**
-- `tokenAddress` (required): The contract address of the Super Token (e.g., `0xa69f80524381275a7ffdb3ae01c54150644c8792`)
+- `tokenAddressOrSymbol` (required): Either the contract address of the Super Token (e.g., `0xa69f80524381275a7ffdb3ae01c54150644c8792`) or the token symbol (e.g., `COWx`, `HNYx`)
 
 **Query Parameters:**
 - `chainId` (required): The EVM chain ID where the token exists (e.g., `1` for Ethereum Mainnet)
@@ -36,6 +36,7 @@ GET /v0/tokens/{tokenAddress}/holders?chainId={chainId}&limit={limit}&offset={of
 ```json
 {
   "tokenAddress": "0xa69f80524381275a7ffdb3ae01c54150644c8792",
+  "tokenSymbol": "COWx",
   "chainId": 1,
   "blockNumber": 17000000,
   "limit": 10,
