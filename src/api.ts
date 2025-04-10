@@ -2,42 +2,89 @@ import express from 'express';
 import sfMeta from '@superfluid-finance/metadata';
 import { getTokenHolders } from './snapshot';
 import { getNetwork } from './utils';
+import { extendedSuperTokenList } from '@superfluid-finance/tokenlist';
 
 // Create Express router
 export const router = express.Router();
 
-// Middleware to validate token address
-function validateTokenAddress(req: express.Request, res: express.Response, next: express.NextFunction): void {
+// Supported chain IDs from Superfluid metadata
+const supportedChainIds = sfMeta.networks
+  .map(network => network.chainId)
+  .filter(Boolean) as number[];
+
+// Filter tokens from tokenlist that have the "supertoken" tag and are on supported chains
+const superTokens = extendedSuperTokenList.tokens.filter(token => 
+  token.tags?.includes('supertoken') && 
+  supportedChainIds.includes(token.chainId)
+);
+
+// Group tokens by chainId
+const tokenConfig: Record<number, Array<{ address: string, symbol: string }>> = {};
+
+// Initialize empty token lists for all supported chains
+supportedChainIds.forEach(chainId => {
+  tokenConfig[chainId] = [];
+});
+
+// Populate token config with tokens from the tokenlist
+superTokens.forEach(token => {
+  if (tokenConfig[token.chainId]) {
+    tokenConfig[token.chainId].push({
+      address: token.address.toLowerCase(),
+      symbol: token.symbol
+    });
+  }
+});
+
+// Middleware to validate token address format
+function validateTokenAddress(req: express.Request, res: express.Response, next: express.NextFunction) {
   const tokenAddress = req.params.tokenAddress;
+  if (!tokenAddress) {
+    return res.status(400).json({
+      error: 'Token address is required'
+    });
+  }
   
-  // Check if token address is valid (0x followed by 40 hex characters)
-  if (!/^0x[a-fA-F0-9]{40}$/.test(tokenAddress)) {
-    res.status(400).json({
+  // Validate token address format
+  if (!tokenAddress.match(/^0x[a-fA-F0-9]{40}$/)) {
+    return res.status(400).json({
       error: 'Invalid token address format'
     });
-    return;
   }
   
   next();
 }
 
-// Middleware to validate chainId
-function validateChainId(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  const chainId = req.query.chainId as string;
-  
+// Middleware to validate chain ID
+function validateChainId(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const chainId = req.query.chainId;
   if (!chainId) {
-    res.status(400).json({
+    return res.status(400).json({
       error: 'chainId query parameter is required'
     });
-    return;
   }
   
-  // Check if chainId is a number
-  if (!/^\d+$/.test(chainId)) {
-    res.status(400).json({
+  // Validate chain ID is a number
+  if (!/^\d+$/.test(chainId as string)) {
+    return res.status(400).json({
       error: 'chainId must be a number'
     });
-    return;
+  }
+  
+  // Check if the chainId is supported
+  const chainIdNum = parseInt(chainId as string);
+  if (!supportedChainIds.includes(chainIdNum)) {
+    return res.status(400).json({
+      error: `Unsupported chainId: ${chainId}. Supported chainIds: ${supportedChainIds.join(', ')}`
+    });
+  }
+  
+  // Check if the token exists in our tokenConfig for this chain
+  const tokenAddress = req.params.tokenAddress.toLowerCase();
+  if (!tokenConfig[chainIdNum].some(token => token.address === tokenAddress)) {
+    return res.status(400).json({
+      error: `Token ${tokenAddress} is not a recognized SuperToken on chain ${chainId}`
+    });
   }
   
   next();
@@ -54,14 +101,12 @@ router.get('/v0/tokens/:tokenAddress/holders',
     // Get query parameters with defaults
     const limit = Math.min(parseInt(req.query.limit as string || '100'), 1000000);
     const offset = parseInt(req.query.offset as string || '0');
-    const minBalanceWei = req.query.minBalanceWei as string || '0';
+    const minBalanceWei = req.query.minBalanceWei as string || '1';
     
     // Find network by chainId from Superfluid metadata
     let networkName = '';
     try {
-      // Get all networks available in the metadata
-      const allNetworks = sfMeta.networks;
-      const network = allNetworks.find(n => n.chainId === chainId);
+      const network = sfMeta.getNetworkByChainId(chainId);
       if (!network) {
         res.status(400).json({
           error: `Unsupported chainId: ${chainId}`
@@ -93,6 +138,58 @@ router.get('/v0/tokens/:tokenAddress/holders',
   }
 );
 
+// GET /v0/supported-chains
+router.get('/v0/supported-chains', (req, res) => {
+  res.json({
+    chains: supportedChainIds
+  });
+});
+
+// GET /v0/tokens
+router.get('/v0/tokens', (req, res) => {
+  const chainId = req.query.chainId ? parseInt(req.query.chainId as string) : null;
+  
+  if (chainId && !supportedChainIds.includes(chainId)) {
+    return res.status(400).json({
+      error: `Unsupported chainId: ${chainId}. Supported chainIds: ${supportedChainIds.join(', ')}`
+    });
+  }
+  
+  // If chainId is provided, return tokens for that chain only
+  if (chainId) {
+    return res.json({
+      chainId,
+      tokens: tokenConfig[chainId] || []
+    });
+  }
+  
+  // Otherwise return all tokens grouped by chainId
+  const response: Record<string, Array<{ address: string, symbol: string }>> = {};
+  
+  Object.entries(tokenConfig).forEach(([chainIdStr, tokens]) => {
+    response[chainIdStr] = tokens;
+  });
+  
+  res.json({
+    tokens: response
+  });
+});
+
+// Catch-all route for invalid endpoints
+router.use((req, res) => {
+  res.status(404).json({
+    error: 'Not found'
+  });
+});
+
+// Error handling middleware
+export const errorHandler = (err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error(err.stack);
+  res.status(500).json({
+    error: 'Internal server error'
+  });
+};
+
 // Create Express application
 export const app = express();
 
@@ -103,9 +200,4 @@ app.use(express.json());
 app.use(router);
 
 // Error handling middleware
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error(err.stack);
-  res.status(500).json({
-    error: 'Internal server error'
-  });
-}); 
+app.use(errorHandler); 

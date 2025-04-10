@@ -143,7 +143,7 @@ export function getTokenHolders(
   tokenAddress: string,
   limit: number = 100,
   offset: number = 0,
-  minBalanceWei: string = '0'
+  minBalanceWei: string = '1'
 ): { updatedAt: number, holders: TokenHolder[] } {
   const key = `${chainName}:${tokenAddress.toLowerCase()}`;
   const cached = tokenHoldersCache[key];
