@@ -43,7 +43,9 @@ export async function takeSnapshot(
             id
             poolMemberships(first: 256 where: {isConnected: true pool_: {token: "${tokenAddress.toLowerCase()}"}}) {
               units
-              syncedPerUnitFlowRate
+              pool {
+                perUnitFlowRate
+              }
             }
           }
         }

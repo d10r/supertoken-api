@@ -33,8 +33,10 @@ export interface AccountTokenSnapshot {
   account: {
     id: string;
     poolMemberships: {
-      syncedPerUnitFlowRate: string;
       units: string;
+      pool: {
+        perUnitFlowRate: string;
+      };
     }[];
   };
 }
@@ -193,7 +195,8 @@ export async function batchFetchBalances(
 export function getNetFlowRate(snapshot: AccountTokenSnapshot): string {
   let netFlowRate = BigInt(snapshot.totalNetFlowRate);
   for (const poolMembership of snapshot.account.poolMemberships) {
-    netFlowRate += BigInt(poolMembership.syncedPerUnitFlowRate) * BigInt(poolMembership.units);
+    // potential inaccuracy here, the pool data may be more recent than the snapshot
+    netFlowRate += BigInt(poolMembership.pool.perUnitFlowRate) * BigInt(poolMembership.units);
   }
   return netFlowRate.toString();
 }
