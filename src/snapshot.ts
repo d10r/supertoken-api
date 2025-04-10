@@ -93,7 +93,6 @@ export async function takeSnapshot(
       console.log(`Total time: ${stats.totalTime.toFixed(2)}ms`);
       console.log(`Average time per batch: ${(stats.totalTime / stats.batchCount).toFixed(2)}ms`);
       console.log(`Max batch time: ${stats.maxBatchTime.toFixed(2)}ms`);
-      console.log(`Total retries: ${stats.retriesCount}`);
       
       // Create holder objects with balances from RPC and flow rates from the subgraph
       const holders: TokenHolder[] = allAccounts.map(address => {

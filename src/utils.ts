@@ -51,8 +51,13 @@ export function getRpcUrl(networkName: string): string {
 // Create Viem Public Client for a network
 export function createRpcClient(networkName: string): PublicClient {
   const rpcUrl = getRpcUrl(networkName);
+  
+  // Create client with built-in retry logic
   return createPublicClient({
-    transport: http(rpcUrl, { retryCount: 3, retryDelay: 1000 }),
+    transport: http(rpcUrl, { 
+      retryCount: 3,       // Viem will retry failed requests up to 3 times
+      retryDelay: 1000     // Initial delay before first retry (ms)
+    }),
     batch: {
       multicall: true
     }
@@ -99,19 +104,17 @@ export async function batchFetchBalances(
   client: PublicClient,
   tokenAddress: string,
   accounts: string[],
-  batchSize: number,
-  maxRetries: number = 3
+  batchSize: number
 ): Promise<{ 
   balances: Record<string, string>, 
   blockNumber: number,
-  stats: { totalTime: number, batchCount: number, maxBatchTime: number, retriesCount: number }
+  stats: { totalTime: number, batchCount: number, maxBatchTime: number }
 }> {
   const balances: Record<string, string> = {};
   
   let totalTime = 0;
   let maxBatchTime = 0;
   let batchCount = 0;
-  let retriesCount = 0;
   let blockNumber = 0;
   
   // Create an ERC20 contract instance
@@ -130,46 +133,6 @@ export async function batchFetchBalances(
     throw new Error('Could not get current block number');
   }
   
-  // Helper function with retry logic
-  const getBalanceWithRetry = async (account: string, currentBatchSize: number): Promise<{ account: string, balance: string }> => {
-    let retries = 0;
-    let reducedBatchSize = currentBatchSize;
-    
-    while (retries < maxRetries) {
-      try {
-        // Always fetch at the specific block number for atomicity
-        // Convert blockNumber to bigint as required by viem
-        const balance = await erc20Contract.read.balanceOf(
-          [account as `0x${string}`], 
-          { blockNumber: BigInt(blockNumber) }
-        );
-        return { account, balance: balance.toString() };
-      } catch (err) {
-        retries++;
-        retriesCount++;
-        
-        if (retries >= maxRetries) {
-          console.error(`Failed to fetch balance for ${account} after ${maxRetries} retries:`, err);
-          throw err;
-        }
-        
-        // Exponential backoff
-        const delay = 1000 * Math.pow(2, retries - 1);
-        console.warn(`Retry ${retries}/${maxRetries} for ${account} after ${delay}ms`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        
-        // Optionally reduce batch size on retry (if we're in batch context)
-        if (reducedBatchSize > 1) {
-          reducedBatchSize = Math.max(1, Math.floor(reducedBatchSize / 2));
-          console.warn(`Reducing batch size to ${reducedBatchSize}`);
-        }
-      }
-    }
-    
-    // This should never be reached due to the throw in the retry loop
-    throw new Error(`Failed to fetch balance for ${account}`);
-  };
-  
   // Process in batches
   for (let i = 0; i < accounts.length; i += batchSize) {
     batchCount++;
@@ -179,7 +142,17 @@ export async function batchFetchBalances(
     try {
       // Make batch call to balanceOf for all accounts in this batch
       const batchResults = await Promise.all(
-        batchAccounts.map(account => getBalanceWithRetry(account, batchSize))
+        batchAccounts.map(account => 
+          erc20Contract.read.balanceOf(
+            [account as `0x${string}`], 
+            { blockNumber: BigInt(blockNumber) }
+          )
+          .then(balance => ({ account, balance: balance.toString() }))
+          .catch(err => {
+            console.error(`Error fetching balance for ${account}:`, err);
+            throw err; // Let viem's retry handle this
+          })
+        )
       );
       
       // Calculate batch time
@@ -207,8 +180,7 @@ export async function batchFetchBalances(
     stats: {
       totalTime,
       batchCount,
-      maxBatchTime,
-      retriesCount
+      maxBatchTime
     }
   };
 }
