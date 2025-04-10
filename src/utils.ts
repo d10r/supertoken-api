@@ -95,6 +95,7 @@ export async function queryAllPages<T>(
     }
     process.stdout.write(".");
   }
+  console.log("");
 
   return items;
 }
@@ -127,13 +128,15 @@ export async function batchFetchBalances(
   // Get current block number first to ensure atomicity
   try {
     blockNumber = Number(await client.getBlockNumber());
-    console.log(`Fetching balances at block number: ${blockNumber}`);
   } catch (error) {
     console.error('Failed to get block number:', error);
     throw new Error('Could not get current block number');
   }
   
   // Process in batches
+  const totalBatches = Math.ceil(accounts.length / batchSize);
+  process.stdout.write(`Fetching balances at block ${blockNumber} - ${totalBatches} batches of ${batchSize}`);
+  
   for (let i = 0; i < accounts.length; i += batchSize) {
     batchCount++;
     const batchAccounts = accounts.slice(i, i + batchSize);
@@ -165,14 +168,14 @@ export async function batchFetchBalances(
         balances[result.account] = result.balance;
       });
       
-      process.stdout.write("+");
+      process.stdout.write(".");
     } catch (error) {
-      console.error(`Failed to process batch ${batchCount}:`, error);
-      // Don't break the whole process for a single batch failure
-      // Just log the error and continue with the next batch
+      console.error(`Failed to process batch ${batchCount}/${totalBatches}`);
       process.stdout.write("x");
     }
   }
+  
+  console.log("");
   
   return { 
     balances,

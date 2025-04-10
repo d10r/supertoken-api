@@ -55,6 +55,7 @@ superTokens.forEach(token => {
 });
 
 // Log the token configuration
+console.log(`\n=== Token Configuration ===`);
 Object.entries(tokenConfig).forEach(([chainId, tokens]) => {
   console.log(`Chain ${chainId}: ${tokens.length} tokens found`);
   tokens.forEach(token => {
@@ -73,17 +74,22 @@ function getNetworkName(chainId: number): string {
 
 // Load initial data from files and update if stale
 async function loadInitialData(): Promise<void> {
-  console.log('Loading initial data from files...');
+  console.log(`\n=== Loading Initial Data ===`);
   
   // Track tokens that need updates
   const tokensToUpdate: Array<{ networkName: string, address: string, symbol: string, dataAge: number }> = [];
+  let totalTokens = 0;
+  let loadedTokens = 0;
   
   // First, load all data from files
   for (const [chainIdStr, tokens] of Object.entries(tokenConfig)) {
     const chainId = parseInt(chainIdStr);
     const networkName = getNetworkName(chainId);
     
+    console.log(`Network: ${networkName} (${chainId})`);
+    
     for (const token of tokens) {
+      totalTokens++;
       // if env var DEBUG_ONLY_TOKEN is set, only process this token
       if (process.env.DEBUG_ONLY_TOKEN && token.symbol !== process.env.DEBUG_ONLY_TOKEN) {
         continue;
@@ -91,39 +97,50 @@ async function loadInitialData(): Promise<void> {
       
       // Load data from file
       const data = loadTokenHolders(networkName, token.address);
-      console.log(`Loaded ${data.holders.length} holders for ${networkName}:${token.address} (${token.symbol})`);
       
       // Add the loaded data to the in-memory cache regardless of age
       // This ensures API has data available immediately
-      updateTokenHoldersCache(networkName, token.address, data);
+      if (data) {
+        loadedTokens++;
+        updateTokenHoldersCache(networkName, token.address, data);
+      }
       
       // Check if data is stale and needs to be updated
       const now = Math.floor(Date.now() / 1000);
       const dataAge = now - Math.floor(data.updatedAt / 1000);
       
       if (dataAge > UPDATE_INTERVAL) {
-        console.log(`Data for ${networkName}:${token.address} (${token.symbol}) is stale (${dataAge}s old), will update...`);
         tokensToUpdate.push({ 
           networkName, 
           address: token.address, 
           symbol: token.symbol,
           dataAge 
         });
-      } else {
-        console.log(`Using cached data for ${networkName}:${token.address} (${token.symbol}) (${dataAge}s old)`);
+      }
+      
+      // Only log detailed information for tokens with holders or those needing updates
+      if (data.holders.length > 0 || dataAge > UPDATE_INTERVAL) {
+        console.log(`  ${token.symbol} (${token.address}): ${data.holders.length} holders${dataAge > UPDATE_INTERVAL ? ' (stale: ' + dataAge + 's)' : ' (fresh)'}`);
       }
     }
   }
   
+  console.log(`\nLoaded ${loadedTokens}/${totalTokens} tokens with data from files`);
+  
   // After loading all data, update stale data in the background
-  console.log(`All data loaded from files. Updating ${tokensToUpdate.length} stale tokens...`);
-  
-  for (const token of tokensToUpdate) {
-    console.log(`Updating ${token.networkName}:${token.address} (${token.symbol}) - ${token.dataAge}s old`);
-    await takeSnapshot(token.networkName, token.address, RPC_BATCH_SIZE);
+  if (tokensToUpdate.length > 0) {
+    console.log(`\n=== Updating ${tokensToUpdate.length} Stale Tokens ===`);
+    
+    for (let i = 0; i < tokensToUpdate.length; i++) {
+      const token = tokensToUpdate[i];
+      console.log(`[${i+1}/${tokensToUpdate.length}] Updating ${token.symbol} on ${token.networkName}`);
+      await takeSnapshot(token.networkName, token.address, RPC_BATCH_SIZE);
+    }
+    
+    console.log(`\n=== Data Updates Complete ===`);
+  } else {
+    console.log(`\nNo stale data to update`);
   }
-  
-  console.log('Initial data loading and updates complete');
 }
 
 // Take snapshots for all tokens

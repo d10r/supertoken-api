@@ -92,7 +92,7 @@ function validateToken(req: express.Request, res: express.Response, next: expres
     
     // Store the address for later use
     req.params.tokenAddress = tokenInfo.address;
-    console.log(`Resolved symbol ${tokenParam} to address ${tokenInfo.address} on chain ${chainIdNum}`);
+    //console.log(`Resolved symbol ${tokenParam} to address ${tokenInfo.address} on chain ${chainIdNum}`);
   }
   
   next();
@@ -109,6 +109,8 @@ router.get('/v0/tokens/:tokenAddress/holders',
     const limit = Math.min(parseInt(req.query.limit as string || '100'), 1000000);
     const offset = parseInt(req.query.offset as string || '0');
     const minBalanceWei = req.query.minBalanceWei as string || '1';
+    
+    console.log(`Request: /v0/tokens/${tokenAddress}/holders?chainId=${chainId}&limit=${limit}&offset=${offset}&minBalanceWei=${minBalanceWei}`);
     
     // Find network by chainId from Superfluid metadata
     let networkName = '';
