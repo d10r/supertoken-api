@@ -2,6 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import sfMeta from '@superfluid-finance/metadata';
+import { createPublicClient, http, type PublicClient, getContract } from 'viem';
+import { parseAbi } from 'viem';
+
+// ERC20 ABI for balanceOf call
+const ERC20_ABI = parseAbi([
+  'function balanceOf(address owner) view returns (uint256)'
+]);
 
 // Types
 export interface TokenHolder {
@@ -10,6 +17,7 @@ export interface TokenHolder {
   claimableBalance: string;
   netFlowRate: string;
   lastUpdatedAt: number;
+  hasPoolMembership: boolean;
 }
 
 export interface AccountTokenSnapshot {
@@ -34,6 +42,19 @@ export interface AccountTokenSnapshot {
 // Get subgraph URL for a network
 export function getSubgraphUrl(networkName: string): string {
   return `https://subgraph-endpoints.superfluid.dev/${networkName}/protocol-v1`;
+}
+
+// Get RPC URL for a network
+export function getRpcUrl(networkName: string): string {
+  return `https://${networkName}.rpc.x.superfluid.dev`;
+}
+
+// Create Viem Public Client for a network
+export function createRpcClient(networkName: string): PublicClient {
+  const rpcUrl = getRpcUrl(networkName);
+  return createPublicClient({
+    transport: http(rpcUrl)
+  });
 }
 
 // Query Superfluid subgraph with pagination - generic helper
@@ -71,6 +92,67 @@ export async function queryAllPages<T>(
   return items;
 }
 
+// Batch fetch balances via RPC
+export async function batchFetchBalances(
+  client: PublicClient,
+  tokenAddress: string,
+  accounts: string[],
+  batchSize: number
+): Promise<{ balances: Record<string, string>, stats: { totalTime: number, batchCount: number, maxBatchTime: number } }> {
+  const balances: Record<string, string> = {};
+  
+  let totalTime = 0;
+  let maxBatchTime = 0;
+  let batchCount = 0;
+  
+  // Create an ERC20 contract instance
+  const erc20Contract = getContract({
+    address: tokenAddress as `0x${string}`,
+    abi: ERC20_ABI,
+    client
+  });
+  
+  // Process in batches
+  for (let i = 0; i < accounts.length; i += batchSize) {
+    batchCount++;
+    const batchAccounts = accounts.slice(i, i + batchSize);
+    const batchStart = performance.now();
+    
+    // Make batch call to balanceOf for all accounts in this batch
+    const batchResults = await Promise.all(
+      batchAccounts.map(account => 
+        erc20Contract.read.balanceOf([account as `0x${string}`])
+          .then(balance => ({ account, balance: balance.toString() }))
+          .catch(err => {
+            console.error(`Error fetching balance for ${account}:`, err);
+            return { account, balance: '0' };
+          })
+      )
+    );
+    
+    // Calculate batch time
+    const batchTime = performance.now() - batchStart;
+    totalTime += batchTime;
+    maxBatchTime = Math.max(maxBatchTime, batchTime);
+    
+    // Add results to balances map
+    batchResults.forEach(result => {
+      balances[result.account] = result.balance;
+    });
+    
+    process.stdout.write("+");
+  }
+  
+  return { 
+    balances,
+    stats: {
+      totalTime,
+      batchCount,
+      maxBatchTime
+    }
+  };
+}
+
 // Calculate holder balance based on the formula from the spec
 export function calculateHolderBalance(snapshot: AccountTokenSnapshot, currentTimestamp: number): TokenHolder {
   const address = snapshot.account.id;
@@ -90,8 +172,12 @@ export function calculateHolderBalance(snapshot: AccountTokenSnapshot, currentTi
     balance += BigInt(netFlowRate) * BigInt(deltaT);
   }
   
+  // Check if account has pool memberships
+  const hasPoolMembership = snapshot.account.poolMemberships && 
+                           snapshot.account.poolMemberships.length > 0;
+  
   // Add GDA in if there are pool memberships
-  if (snapshot.account.poolMemberships && snapshot.account.poolMemberships.length > 0) {
+  if (hasPoolMembership) {
     for (const pms of snapshot.account.poolMemberships) {
       const perUnitFlowRate = pms.pool.perUnitFlowRate || "0";
       const units = pms.units || "0";
@@ -111,7 +197,8 @@ export function calculateHolderBalance(snapshot: AccountTokenSnapshot, currentTi
     balance: balance.toString(),
     claimableBalance: claimableBalance.toString(),
     netFlowRate,
-    lastUpdatedAt: updatedAtTimestamp
+    lastUpdatedAt: updatedAtTimestamp,
+    hasPoolMembership
   };
 }
 

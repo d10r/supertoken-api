@@ -3,6 +3,8 @@ import {
   queryAllPages,
   saveTokenHolders,
   calculateHolderBalance,
+  createRpcClient,
+  batchFetchBalances,
   TokenHolder,
   AccountTokenSnapshot
 } from './utils';
@@ -13,7 +15,8 @@ const tokenHoldersCache: Record<string, { updatedAt: number, holders: TokenHolde
 // Take a snapshot of token holders for a specific token on a specific chain
 export async function takeSnapshot(
   chainName: string,
-  tokenAddress: string
+  tokenAddress: string,
+  rpcBatchSize: number = 100
 ): Promise<void> {
   console.log(`Taking snapshot for ${chainName}:${tokenAddress}`);
   
@@ -22,12 +25,18 @@ export async function takeSnapshot(
     const currentTimestamp = Math.floor(Date.now() / 1000);
     
     // Fetch all token holders from the subgraph
+    console.log(`Querying subgraph for account token snapshots...`);
     const snapshots = await queryAllPages<AccountTokenSnapshot>(
       // Query function with pagination
-      (lastId) => `{
+      (lastId) => {
+        const whereClause = lastId 
+          ? `{token: "${tokenAddress.toLowerCase()}", id_gt: "${lastId}"}`
+          : `{token: "${tokenAddress.toLowerCase()}"}`;
+          
+        return `{
           accountTokenSnapshots(
             first: 1000,
-            where: {token: "${tokenAddress.toLowerCase()}", id_gt: "${lastId}"},
+            where: ${whereClause},
             orderBy: id,
             orderDirection: asc
           ) {
@@ -48,7 +57,8 @@ export async function takeSnapshot(
             updatedAtTimestamp
             balanceUntilUpdatedAt
           }
-        }`,
+        }`;
+      },
       // Extract items from response
       (response) => response.data.data.accountTokenSnapshots || [],
       // Return the item as is
@@ -56,19 +66,60 @@ export async function takeSnapshot(
       subgraphUrl
     );
     
-    // Process snapshots and calculate balances
-    const holders = snapshots
-      .map(snapshot => calculateHolderBalance(snapshot, currentTimestamp))
-      .sort((a, b) => {
-        // Sort by balance descending
-        const balanceA = BigInt(a.balance);
-        const balanceB = BigInt(b.balance);
-        if (balanceB > balanceA) return 1;
-        if (balanceB < balanceA) return -1;
-        return 0;
-      });
+    console.log(`\nFound ${snapshots.length} account token snapshots`);
     
-    console.log(`\nFound ${holders.length} holders for ${chainName}:${tokenAddress}`);
+    // Calculate balances from subgraph data
+    console.log(`Calculating balances from subgraph data...`);
+    const calculatedHolders = snapshots.map(snapshot => 
+      calculateHolderBalance(snapshot, currentTimestamp)
+    );
+    
+    // Count accounts with and without pool memberships
+    const accountsWithPools = calculatedHolders.filter(h => h.hasPoolMembership);
+    const accountsWithoutPools = calculatedHolders.filter(h => !h.hasPoolMembership);
+    
+    console.log(`Accounts with pool memberships: ${accountsWithPools.length}`);
+    console.log(`Accounts without pool memberships: ${accountsWithoutPools.length}`);
+    
+    // Create RPC client for this network
+    console.log(`Creating RPC client for ${chainName}...`);
+    const rpcClient = createRpcClient(chainName);
+    
+    // Get all unique account addresses
+    const allAccounts = calculatedHolders.map(h => h.address);
+    
+    // Fetch real balances via RPC
+    console.log(`Fetching real balances via RPC in batches of ${rpcBatchSize}...`);
+    const { balances: realBalances, stats } = await batchFetchBalances(
+      rpcClient,
+      tokenAddress,
+      allAccounts,
+      rpcBatchSize
+    );
+    
+    // Log RPC batch stats
+    console.log(`\nRPC Batch Statistics:`);
+    console.log(`Total batches: ${stats.batchCount}`);
+    console.log(`Total time: ${stats.totalTime.toFixed(2)}ms`);
+    console.log(`Average time per batch: ${(stats.totalTime / stats.batchCount).toFixed(2)}ms`);
+    console.log(`Max batch time: ${stats.maxBatchTime.toFixed(2)}ms`);
+    
+    // Update holders with real balances from RPC
+    const holders = calculatedHolders.map(holder => ({
+      ...holder,
+      balance: realBalances[holder.address] || holder.balance
+    }));
+    
+    // Sort holders by balance descending
+    holders.sort((a, b) => {
+      const balanceA = BigInt(a.balance);
+      const balanceB = BigInt(b.balance);
+      if (balanceB > balanceA) return 1;
+      if (balanceB < balanceA) return -1;
+      return 0;
+    });
+    
+    console.log(`\nFinished processing ${holders.length} holders for ${chainName}:${tokenAddress}`);
     
     // Update cache
     const key = `${chainName}:${tokenAddress.toLowerCase()}`;

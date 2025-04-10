@@ -4,7 +4,7 @@ A simple REST API for retrieving Super Token holder information, including balan
 
 ## Overview
 
-This API provides access to token holder data for Super Tokens across multiple EVM chains. It periodically takes snapshots of token holder balances by querying the Superfluid subgraph and calculating accurate balances that include streaming and pool memberships, which conventional ERC20 tools often miss.
+This API provides access to token holder data for Super Tokens across multiple EVM chains. It periodically takes snapshots of token holder balances by querying the Superfluid subgraph and calculating accurate balances that include streaming and pool memberships, which conventional ERC20 tools often miss. For accuracy, it also verifies balances using RPC calls.
 
 ## Features
 
@@ -12,6 +12,7 @@ This API provides access to token holder data for Super Tokens across multiple E
 - Support for multiple chains and tokens
 - Periodic background jobs to update token holder data
 - Calculation of correct token balances including streaming rates
+- RPC verification of token balances for improved accuracy
 - In-memory caching with JSON file persistence
 
 ## API Endpoints
@@ -95,8 +96,9 @@ Configure the application by setting the following environment variables in the 
 
 - `CHAINS`: Comma-separated list of supported chains (network names from @superfluid-finance/metadata)
 - `TOKENS_BASE_MAINNET`: Comma-separated list of token addresses for Base Mainnet (currently only Base Mainnet is supported for token monitoring)
-- `UPDATE_INTERVAL`: Snapshot update interval in cron format (default: every hour - `0 * * * *`)
+- `UPDATE_INTERVAL`: Snapshot update interval in seconds (default: 3600 = every hour)
 - `PORT`: Port for the API server (default: 3000)
+- `RPC_BATCH_SIZE`: Number of accounts to include in each RPC batch call for balance verification (default: 100)
 
 ## How It Works
 
@@ -105,8 +107,9 @@ Configure the application by setting the following environment variables in the 
    - The balance at the last update time
    - The net flow rate (for streaming)
    - Connected pool memberships (for distribution agreements)
-3. The results are stored in memory and persisted to JSON files
-4. The API serves this data with filtering and pagination
+3. It then verifies the balances by making RPC calls to the blockchain
+4. The results are stored in memory and persisted to JSON files
+5. The API serves this data with filtering and pagination
 
 ## Development
 

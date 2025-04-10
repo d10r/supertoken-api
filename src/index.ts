@@ -11,6 +11,9 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 const UPDATE_INTERVAL = process.env.UPDATE_INTERVAL 
   ? parseInt(process.env.UPDATE_INTERVAL)
   : 3600; // Default: every hour (3600 seconds)
+const RPC_BATCH_SIZE = process.env.RPC_BATCH_SIZE
+  ? parseInt(process.env.RPC_BATCH_SIZE)
+  : 100; // Default batch size: 100
 
 // Parse chains from environment variables
 const chains = (process.env.CHAINS || '').split(',').filter(Boolean);
@@ -45,7 +48,7 @@ async function loadInitialData(): Promise<void> {
       
       if (data.holders.length === 0 || dataAge > UPDATE_INTERVAL) {
         console.log(`Data for ${chainName}:${tokenAddress} is stale (${dataAge}s old), updating...`);
-        await takeSnapshot(chainName, tokenAddress);
+        await takeSnapshot(chainName, tokenAddress, RPC_BATCH_SIZE);
       } else {
         console.log(`Using cached data for ${chainName}:${tokenAddress} (${dataAge}s old)`);
       }
@@ -59,7 +62,7 @@ async function takeSnapshots(): Promise<void> {
   
   for (const chainName of Object.keys(tokenConfig)) {
     for (const tokenAddress of tokenConfig[chainName]) {
-      await takeSnapshot(chainName, tokenAddress);
+      await takeSnapshot(chainName, tokenAddress, RPC_BATCH_SIZE);
     }
   }
 }
