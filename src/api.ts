@@ -1,9 +1,9 @@
 import express from 'express';
 import sfMeta from '@superfluid-finance/metadata';
 import { getTokenHolders } from './snapshot';
-import { getNetwork } from './utils';
+import { getNetwork, createRpcClient, getNetFlowRate } from './utils';
 import { extendedSuperTokenList } from '@superfluid-finance/tokenlist';
-import { isAddress } from 'viem';
+import { isAddress, getContract, parseAbi } from 'viem';
 
 // Create Express router
 export const router = express.Router();
@@ -37,9 +37,14 @@ superTokens.forEach(token => {
   }
 });
 
+// ERC20 ABI for balanceOf call
+const ERC20_ABI = parseAbi([
+  'function balanceOf(address owner) view returns (uint256)'
+]);
+
 // Middleware to validate token parameter (address or symbol)
 function validateToken(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const tokenParam = req.params.tokenAddress;
+  const tokenParam = req.params.tokenAddress || req.params.tokenAddressOrSymbol;
   const chainId = req.query.chainId;
   
   if (!tokenParam) {
@@ -79,7 +84,7 @@ function validateToken(req: express.Request, res: express.Response, next: expres
     }
     
     // Store the address in lowercase for later use
-    req.params.tokenAddress = tokenAddress;
+    req.params.resolvedTokenAddress = tokenAddress;
   } else {
     // It's a symbol, look up the address for this chain
     const tokenInfo = tokenConfig[chainIdNum].find(token => token.symbol === tokenParam);
@@ -91,18 +96,79 @@ function validateToken(req: express.Request, res: express.Response, next: expres
     }
     
     // Store the address for later use
-    req.params.tokenAddress = tokenInfo.address;
-    //console.log(`Resolved symbol ${tokenParam} to address ${tokenInfo.address} on chain ${chainIdNum}`);
+    req.params.resolvedTokenAddress = tokenInfo.address;
   }
   
   next();
+}
+
+// Middleware to validate account parameter
+function validateAccount(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const accountAddress = req.params.accountAddress;
+  
+  if (!accountAddress) {
+    return res.status(400).json({
+      error: 'Account address is required'
+    });
+  }
+  
+  if (!isAddress(accountAddress, { strict: false })) {
+    return res.status(400).json({
+      error: 'Invalid account address format'
+    });
+  }
+  
+  // Store normalized address
+  req.params.accountAddress = accountAddress.toLowerCase();
+  
+  next();
+}
+
+// Utility function to query the subgraph for an account's token snapshot
+async function getAccountTokenSnapshot(networkName: string, tokenAddress: string, accountAddress: string) {
+  try {
+    const subgraphUrl = `https://subgraph-endpoints.superfluid.dev/${networkName}/protocol-v1`;
+    const query = `{
+      accountTokenSnapshot(
+        id: "${accountAddress.toLowerCase()}-${tokenAddress.toLowerCase()}"
+      ) {
+        id
+        totalNetFlowRate
+        balanceUntilUpdatedAt
+        updatedAtBlockNumber
+        account {
+          id
+          poolMemberships(first: 256 where: {isConnected: true pool_: {token: "${tokenAddress.toLowerCase()}"}}) {
+            units
+            pool {
+              perUnitFlowRate
+            }
+          }
+        }
+      }
+    }`;
+    
+    const response = await fetch(subgraphUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query })
+    });
+    
+    const responseData = await response.json();
+    return responseData.data?.accountTokenSnapshot || null;
+  } catch (error) {
+    console.error('Error fetching account token snapshot:', error);
+    return null;
+  }
 }
 
 // GET /v0/tokens/:tokenAddress/holders
 router.get('/v0/tokens/:tokenAddress/holders',
   validateToken,
   (req, res) => {
-    const tokenAddress = req.params.tokenAddress; // Already validated and normalized in middleware
+    const tokenAddress = req.params.resolvedTokenAddress; // Resolved in middleware
     const chainId = parseInt(req.query.chainId as string);
     
     // Get query parameters with defaults
@@ -149,6 +215,88 @@ router.get('/v0/tokens/:tokenAddress/holders',
       total: result.holders.length,
       holders: result.holders
     });
+  }
+);
+
+// GET /v0/accounts/:accountAddress/tokens/:tokenAddressOrSymbol/balance
+router.get('/v0/accounts/:accountAddress/tokens/:tokenAddressOrSymbol/balance',
+  validateAccount,
+  validateToken,
+  async (req, res) => {
+    const accountAddress = req.params.accountAddress;
+    const tokenAddress = req.params.resolvedTokenAddress;
+    const chainId = parseInt(req.query.chainId as string);
+    
+    console.log(`Request: /v0/accounts/${accountAddress}/tokens/${tokenAddress}/balance?chainId=${chainId}`);
+    
+    // Find network by chainId from Superfluid metadata
+    let networkName = '';
+    try {
+      const network = sfMeta.getNetworkByChainId(chainId);
+      if (!network) {
+        res.status(400).json({
+          error: `Unsupported chainId: ${chainId}`
+        });
+        return;
+      }
+      networkName = network.name;
+    } catch (error) {
+      console.error('Error finding network:', error);
+      res.status(500).json({
+        error: 'Internal server error'
+      });
+      return;
+    }
+    
+    try {
+      // Get the RPC client
+      const rpcClient = createRpcClient(networkName);
+      
+      // Create an ERC20 contract instance
+      const erc20Contract = getContract({
+        address: tokenAddress as `0x${string}`,
+        abi: ERC20_ABI,
+        client: rpcClient
+      });
+      
+      // Get current block number
+      const blockNumber = Number(await rpcClient.getBlockNumber());
+      
+      // Query the balance
+      const balance = await erc20Contract.read.balanceOf(
+        [accountAddress as `0x${string}`],
+        { blockNumber: BigInt(blockNumber) }
+      );
+      
+      // Query the account token snapshot for flow rate information
+      const snapshot = await getAccountTokenSnapshot(networkName, tokenAddress, accountAddress);
+      
+      // Get the token symbol for the response
+      const tokenInfo = tokenConfig[chainId].find(t => t.address === tokenAddress);
+      const tokenSymbol = tokenInfo ? tokenInfo.symbol : '';
+      
+      // Default to zero flow rate if no snapshot exists
+      let netFlowRate = "0";
+      
+      if (snapshot) {
+        netFlowRate = getNetFlowRate(snapshot);
+      }
+      
+      res.json({
+        account: accountAddress,
+        tokenAddress,
+        tokenSymbol,
+        chainId,
+        blockNumber,
+        balance: balance.toString(),
+        netFlowRate
+      });
+    } catch (error) {
+      console.error('Error fetching account balance:', error);
+      res.status(500).json({
+        error: 'Error fetching account balance'
+      });
+    }
   }
 );
 
