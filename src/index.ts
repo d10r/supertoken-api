@@ -28,12 +28,32 @@ const supportedChainIds = supportedChainNames
   })
   .filter(Boolean) as number[];
 
+// Parse the SKIP_TOKENS environment variable for tokens to skip
+// Format is chainId:tokenSymbol, e.g. "100:xDAIx,137:MATICx"
+const skipTokensConfig = process.env.SKIP_TOKENS || '';
+const skipTokens = new Set<string>();
+
+// Parse the skip tokens configuration
+if (skipTokensConfig) {
+  skipTokensConfig.split(',').forEach(entry => {
+    const [chainId, symbol] = entry.trim().split(':');
+    if (chainId && symbol) {
+      skipTokens.add(`${chainId}:${symbol}`);
+    }
+  });
+}
+
 console.log(`Supported chains: ${supportedChainIds.join(', ')}`);
+if (skipTokens.size > 0) {
+  console.log(`Skipping tokens: ${Array.from(skipTokens).join(', ')}`);
+}
 
 // Filter tokens from tokenlist that have the "supertoken" tag and are on supported chains
 const superTokens = extendedSuperTokenList.tokens.filter(token => 
   token.tags?.includes('supertoken') && 
-  supportedChainIds.includes(token.chainId)
+  supportedChainIds.includes(token.chainId) &&
+  // Skip tokens that are in the skipTokens list
+  !skipTokens.has(`${token.chainId}:${token.symbol}`)
 );
 
 // Group tokens by chainId
