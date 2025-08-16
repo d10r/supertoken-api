@@ -37,6 +37,22 @@ superTokens.forEach(token => {
   }
 });
 
+// patch in override list
+const overrideList = [
+  {
+    chainId: 8453,
+    address: '0x93419f1c0f73b278c73085c17407794a6580deff',
+    symbol: 'stSTREME'
+  }
+];
+// add override list to tokenConfig
+overrideList.forEach(override => {
+  tokenConfig[override.chainId].push({
+    address: override.address.toLowerCase(),
+    symbol: override.symbol
+  });
+});
+
 // ERC20 ABI for balanceOf call
 const ERC20_ABI = parseAbi([
   'function balanceOf(address owner) view returns (uint256)'
