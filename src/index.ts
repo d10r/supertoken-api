@@ -2,8 +2,8 @@ import dotenv from 'dotenv';
 import { app } from './api';
 import { takeSnapshot, updateTokenHoldersCache } from './snapshot';
 import { loadTokenHolders } from './utils';
-import { extendedSuperTokenList } from '@superfluid-finance/tokenlist';
 import sfMeta from '@superfluid-finance/metadata';
+import { config, initializeConfig, supportedChainIds } from './config';
 
 // Load environment variables
 dotenv.config();
@@ -20,65 +20,24 @@ const RPC_BATCH_SIZE = process.env.RPC_BATCH_SIZE
 // Get supported chains from environment
 const supportedChainNames = (process.env.CHAINS || '').split(',').filter(Boolean);
 
-// Map network names to chainIds
-const supportedChainIds = supportedChainNames
-  .map(name => {
-    const network = sfMeta.getNetworkByName(name);
-    return network ? network.chainId : null;
-  })
-  .filter(Boolean) as number[];
-
-// Parse the SKIP_TOKENS environment variable for tokens to skip
-// Format is chainId:tokenSymbol, e.g. "100:xDAIx,137:MATICx"
+// Parse the SKIP_TOKENS environment variable
 const skipTokensConfig = process.env.SKIP_TOKENS || '';
-const skipTokens = new Set<string>();
 
-// Parse the skip tokens configuration
+// Initialize config
+initializeConfig(supportedChainNames, skipTokensConfig);
+
 if (skipTokensConfig) {
-  skipTokensConfig.split(',').forEach(entry => {
-    const [chainId, symbol] = entry.trim().split(':');
-    if (chainId && symbol) {
-      skipTokens.add(`${chainId}:${symbol}`);
-    }
-  });
+  console.log(`Skipping tokens: ${skipTokensConfig}`);
 }
 
 console.log(`Supported chains: ${supportedChainIds.join(', ')}`);
-if (skipTokens.size > 0) {
-  console.log(`Skipping tokens: ${Array.from(skipTokens).join(', ')}`);
-}
-
-// Filter tokens from tokenlist that have the "supertoken" tag and are on supported chains
-const superTokens = extendedSuperTokenList.tokens.filter(token => 
-  token.tags?.includes('supertoken') && 
-  supportedChainIds.includes(token.chainId) &&
-  // Skip tokens that are in the skipTokens list
-  !skipTokens.has(`${token.chainId}:${token.symbol}`)
-);
-
-// Group tokens by chainId
-const tokenConfig: Record<number, Array<{ address: string, symbol: string }>> = {};
-
-// Initialize empty token lists for all supported chains
-supportedChainIds.forEach(chainId => {
-  tokenConfig[chainId] = [];
-});
-
-// Populate token config with tokens from the tokenlist
-superTokens.forEach(token => {
-  if (tokenConfig[token.chainId]) {
-    tokenConfig[token.chainId].push({
-      address: token.address.toLowerCase(),
-      symbol: token.symbol
-    });
-  }
-});
 
 // Log the token configuration
 console.log(`\n=== Token Configuration ===`);
-Object.entries(tokenConfig).forEach(([chainId, tokens]) => {
-  console.log(`Chain ${chainId}: ${tokens.length} tokens found`);
-  tokens.forEach(token => {
+Object.entries(config).forEach(([chainIdStr, chainConfig]) => {
+  const chainId = parseInt(chainIdStr);
+  console.log(`Chain ${chainId}: ${chainConfig.tokens.length} tokens found`);
+  chainConfig.tokens.forEach(token => {
     console.log(`  - ${token.symbol} (${token.address})`);
   });
 });
@@ -102,13 +61,13 @@ async function loadInitialData(): Promise<void> {
   let loadedTokens = 0;
   
   // First, load all data from files
-  for (const [chainIdStr, tokens] of Object.entries(tokenConfig)) {
+  for (const [chainIdStr, chainConfig] of Object.entries(config)) {
     const chainId = parseInt(chainIdStr);
     const networkName = getNetworkName(chainId);
     
     console.log(`Network: ${networkName} (${chainId})`);
     
-    for (const token of tokens) {
+    for (const token of chainConfig.tokens) {
       totalTokens++;
       // if env var DEBUG_ONLY_TOKEN is set, only process this token
       if (process.env.DEBUG_ONLY_TOKEN && token.symbol !== process.env.DEBUG_ONLY_TOKEN) {
@@ -167,11 +126,11 @@ async function loadInitialData(): Promise<void> {
 async function takeSnapshots(): Promise<void> {
   console.log('Taking snapshots...');
   
-  for (const [chainIdStr, tokens] of Object.entries(tokenConfig)) {
+  for (const [chainIdStr, chainConfig] of Object.entries(config)) {
     const chainId = parseInt(chainIdStr);
     const networkName = getNetworkName(chainId);
     
-    for (const token of tokens) {
+    for (const token of chainConfig.tokens) {
       await takeSnapshot(networkName, token.address, RPC_BATCH_SIZE);
     }
   }

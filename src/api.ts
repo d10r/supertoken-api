@@ -1,46 +1,12 @@
 import express from 'express';
 import sfMeta from '@superfluid-finance/metadata';
 import { getTokenHolders } from './snapshot';
-import { getNetwork, createRpcClient, getNetFlowRate } from './utils';
-import { extendedSuperTokenList } from '@superfluid-finance/tokenlist';
-import { isAddress, getContract, parseAbi } from 'viem';
+import { createRpcClient, getNetFlowRate } from './utils';
+import { isAddress, getContract, parseAbi, erc20Abi } from 'viem';
+import { config, supportedChainIds } from './config';
 
 // Create Express router
 export const router = express.Router();
-
-// Supported chain IDs from Superfluid metadata
-const supportedChainIds = sfMeta.networks
-  .map(network => network.chainId)
-  .filter(Boolean) as number[];
-
-// Filter tokens from tokenlist that have the "supertoken" tag and are on supported chains
-const superTokens = extendedSuperTokenList.tokens.filter(token => 
-  token.tags?.includes('supertoken') && 
-  supportedChainIds.includes(token.chainId)
-);
-
-// Group tokens by chainId
-const tokenConfig: Record<number, Array<{ address: string, symbol: string }>> = {};
-
-// Initialize empty token lists for all supported chains
-supportedChainIds.forEach(chainId => {
-  tokenConfig[chainId] = [];
-});
-
-// Populate token config with tokens from the tokenlist
-superTokens.forEach(token => {
-  if (tokenConfig[token.chainId]) {
-    tokenConfig[token.chainId].push({
-      address: token.address.toLowerCase(),
-      symbol: token.symbol
-    });
-  }
-});
-
-// ERC20 ABI for balanceOf call
-const ERC20_ABI = parseAbi([
-  'function balanceOf(address owner) view returns (uint256)'
-]);
 
 // Middleware to validate token parameter (address or symbol)
 function validateToken(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -74,10 +40,12 @@ function validateToken(req: express.Request, res: express.Response, next: expres
     });
   }
   
+  const chainTokens = config[chainIdNum]?.tokens || [];
+  
   if (isAddress(tokenParam, { strict: false })) {
     // validate if it exists in our tokenConfig for this chain
     const tokenAddress = tokenParam.toLowerCase();
-    if (!tokenConfig[chainIdNum].some(token => token.address === tokenAddress)) {
+    if (!chainTokens.some(token => token.address === tokenAddress)) {
       return res.status(400).json({
         error: `Token ${tokenAddress} is not a recognized SuperToken on chain ${chainId}`
       });
@@ -87,7 +55,7 @@ function validateToken(req: express.Request, res: express.Response, next: expres
     req.params.resolvedTokenAddress = tokenAddress;
   } else {
     // It's a symbol, look up the address for this chain
-    const tokenInfo = tokenConfig[chainIdNum].find(token => token.symbol === tokenParam);
+    const tokenInfo = chainTokens.find(token => token.symbol === tokenParam);
     
     if (!tokenInfo) {
       return res.status(400).json({
@@ -201,7 +169,7 @@ router.get('/v0/tokens/:tokenAddress/holders',
     const result = getTokenHolders(networkName, tokenAddress, limit, offset, minBalanceWei);
     
     // Get the token symbol for the response
-    const tokenInfo = tokenConfig[chainId].find(t => t.address === tokenAddress);
+    const tokenInfo = config[chainId].tokens.find(t => t.address === tokenAddress);
     const tokenSymbol = tokenInfo ? tokenInfo.symbol : '';
     
     // Return response
@@ -255,7 +223,7 @@ router.get('/v0/accounts/:accountAddress/tokens/:tokenAddressOrSymbol/balance',
       // Create an ERC20 contract instance
       const erc20Contract = getContract({
         address: tokenAddress as `0x${string}`,
-        abi: ERC20_ABI,
+        abi: erc20Abi,
         client: rpcClient
       });
       
@@ -272,7 +240,7 @@ router.get('/v0/accounts/:accountAddress/tokens/:tokenAddressOrSymbol/balance',
       const snapshot = await getAccountTokenSnapshot(networkName, tokenAddress, accountAddress);
       
       // Get the token symbol for the response
-      const tokenInfo = tokenConfig[chainId].find(t => t.address === tokenAddress);
+      const tokenInfo = config[chainId].tokens.find(t => t.address === tokenAddress);
       const tokenSymbol = tokenInfo ? tokenInfo.symbol : '';
       
       // Default to zero flow rate if no snapshot exists
@@ -317,23 +285,17 @@ router.get('/v0/tokens', (req, res) => {
     });
   }
   
-  // If chainId is provided, return tokens for that chain only
+  // If chainId is provided, return config for that chain
   if (chainId) {
     return res.json({
       chainId,
-      tokens: tokenConfig[chainId] || []
+      ...config[chainId] || { tokens: [] }
     });
   }
   
-  // Otherwise return all tokens grouped by chainId
-  const response: Record<string, Array<{ address: string, symbol: string }>> = {};
-  
-  Object.entries(tokenConfig).forEach(([chainIdStr, tokens]) => {
-    response[chainIdStr] = tokens;
-  });
-  
+  // Otherwise return all config grouped by chainId
   res.json({
-    tokens: response
+    chains: config
   });
 });
 
