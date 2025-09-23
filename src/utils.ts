@@ -83,12 +83,23 @@ export async function queryAllPages<T>(
       query: queryFn(lastId)
     });
 
+    // Check for GraphQL errors in response
     if (response.data.errors) {
-      console.error('GraphQL errors:', response.data.errors);
-      break;
+      throw new Error(`GraphQL errors: ${JSON.stringify(response.data.errors)}`);
+    }
+
+    // Check for malformed response structure
+    if (!response.data || !response.data.data) {
+      throw new Error('Malformed subgraph response: missing data field');
     }
 
     const newItems = toItems(response);
+
+    // Check if toItems returned null/undefined (indicating malformed data)
+    if (!Array.isArray(newItems)) {
+      throw new Error(`Subgraph response data is not an array: ${typeof newItems}`);
+    }
+
     items.push(...newItems.map(itemFn));
 
     if (newItems.length < pageSize) {
