@@ -22,7 +22,6 @@
   ],
   "dependencies": {
     "@superfluid-finance/metadata": "^1.1.22",
-    "@superfluid-finance/tokenlist": "^5.28.0",
     "axios": "^1.6.7",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

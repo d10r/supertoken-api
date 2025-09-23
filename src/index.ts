@@ -23,24 +23,35 @@ const supportedChainNames = (process.env.CHAINS || '').split(',').filter(Boolean
 // Parse the SKIP_TOKENS environment variable
 const skipTokensConfig = process.env.SKIP_TOKENS || '';
 
-// Initialize config
-initializeConfig(supportedChainNames, skipTokensConfig);
+// Initialize config and start the application
+async function initializeAndStart() {
+  try {
+    // Initialize config
+    await initializeConfig(supportedChainNames, skipTokensConfig);
 
-if (skipTokensConfig) {
-  console.log(`Skipping tokens: ${skipTokensConfig}`);
+    if (skipTokensConfig) {
+      console.log(`Skipping tokens: ${skipTokensConfig}`);
+    }
+
+    console.log(`Supported chains: ${supportedChainIds.join(', ')}`);
+
+    // Log the token configuration
+    console.log(`\n=== Token Configuration ===`);
+    Object.entries(config).forEach(([chainIdStr, chainConfig]) => {
+      const chainId = parseInt(chainIdStr);
+      console.log(`Chain ${chainId}: ${chainConfig.tokens.length} tokens found`);
+      chainConfig.tokens.forEach(token => {
+        console.log(`  - ${token.symbol} (${token.address})`);
+      });
+    });
+
+    // Start the application
+    await start();
+  } catch (error) {
+    console.error('Error initializing application:', error);
+    process.exit(1);
+  }
 }
-
-console.log(`Supported chains: ${supportedChainIds.join(', ')}`);
-
-// Log the token configuration
-console.log(`\n=== Token Configuration ===`);
-Object.entries(config).forEach(([chainIdStr, chainConfig]) => {
-  const chainId = parseInt(chainIdStr);
-  console.log(`Chain ${chainId}: ${chainConfig.tokens.length} tokens found`);
-  chainConfig.tokens.forEach(token => {
-    console.log(`  - ${token.symbol} (${token.address})`);
-  });
-});
 
 // Helper function to get network name from chainId
 function getNetworkName(chainId: number): string {
@@ -152,7 +163,4 @@ async function start(): Promise<void> {
 }
 
 // Start the application
-start().catch(err => {
-  console.error('Error starting application:', err);
-  process.exit(1);
-}); 
+initializeAndStart(); 
