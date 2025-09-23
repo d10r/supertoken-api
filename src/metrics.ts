@@ -7,14 +7,14 @@ export const register = new client.Registry();
 export const httpRequestsTotal = new client.Counter({
   name: 'http_requests_total',
   help: 'Counter for total requests received',
-  labelNames: ['method', 'route', 'status_code'],
+  labelNames: ['status_code'],
   registers: [register]
 });
 
 export const httpRequestDuration = new client.Histogram({
   name: 'http_request_duration_seconds',
   help: 'Duration of HTTP requests in seconds',
-  labelNames: ['method', 'route'],
+  labelNames: [],
   buckets: [0.1, 0.5, 1, 2, 5, 10, 30],
   registers: [register]
 });
@@ -22,7 +22,7 @@ export const httpRequestDuration = new client.Histogram({
 export const httpResponseSize = new client.Histogram({
   name: 'http_response_size_bytes',
   help: 'Size of HTTP response in bytes',
-  labelNames: ['method', 'route'],
+  labelNames: [],
   buckets: [100, 1000, 10000, 100000, 1000000, 10000000],
   registers: [register]
 });

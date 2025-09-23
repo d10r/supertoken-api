@@ -353,20 +353,17 @@ export const app = express();
 // Custom HTTP metrics middleware
 app.use((req, res, next) => {
   const start = Date.now();
-  const route = req.route ? req.route.path : req.path;
   
   res.on('finish', () => {
     const duration = (Date.now() - start) / 1000;
     const responseSize = parseInt(res.get('content-length') || '0', 10);
     const labels = {
-      method: req.method,
-      route: route,
       status_code: res.statusCode.toString()
     };
     
     httpRequestsTotal.inc(labels);
-    httpRequestDuration.observe({ method: req.method, route: route }, duration);
-    httpResponseSize.observe({ method: req.method, route: route }, responseSize);
+    httpRequestDuration.observe({}, duration);
+    httpResponseSize.observe({}, responseSize);
   });
   
   next();
