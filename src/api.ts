@@ -4,9 +4,42 @@ import { getTokenHolders } from './snapshot';
 import { createRpcClient, getNetFlowRate } from './utils';
 import { isAddress, getContract, parseAbi, erc20Abi } from 'viem';
 import { config, supportedChainIds } from './config';
+import { getMetrics, httpRequestsTotal, httpRequestDuration, httpResponseSize } from './metrics';
 
 // Create Express router
 export const router = express.Router();
+
+// Request logging middleware - logs all requests and responses
+router.use((req, res, next) => {
+  const start = Date.now();
+  const originalSend = res.send;
+  
+  // Override res.send to capture response details
+  res.send = function(data) {
+    const duration = Date.now() - start;
+    const responseSize = Buffer.byteLength(data || '', 'utf8');
+    
+    // Log the request/response
+    const logLevel = res.statusCode >= 400 ? 'ERROR' : 'INFO';
+    console.log(`[${logLevel}] ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms - ${responseSize} bytes`);
+    
+    // For error responses, also log the response body (helpful for debugging)
+    if (res.statusCode >= 400) {
+      try {
+        const responseData = JSON.parse(data || '{}');
+        console.log(`[ERROR] Response: ${JSON.stringify(responseData)}`);
+      } catch (e) {
+        // If not JSON, just log the raw response
+        console.log(`[ERROR] Response: ${data}`);
+      }
+    }
+    
+    // Call original send
+    return originalSend.call(this, data);
+  };
+  
+  next();
+});
 
 // Middleware to validate token parameter (address or symbol)
 function validateToken(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -316,6 +349,35 @@ export const errorHandler = (err: Error, req: express.Request, res: express.Resp
 
 // Create Express application
 export const app = express();
+
+// Custom HTTP metrics middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  const route = req.route ? req.route.path : req.path;
+  
+  res.on('finish', () => {
+    const duration = (Date.now() - start) / 1000;
+    const responseSize = parseInt(res.get('content-length') || '0', 10);
+    const labels = {
+      method: req.method,
+      route: route,
+      status_code: res.statusCode.toString()
+    };
+    
+    httpRequestsTotal.inc(labels);
+    httpRequestDuration.observe({ method: req.method, route: route }, duration);
+    httpResponseSize.observe({ method: req.method, route: route }, responseSize);
+  });
+  
+  next();
+});
+
+// Custom metrics endpoint that includes our custom metrics (must be before router)
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', 'text/plain');
+  const metrics = await getMetrics();
+  res.send(metrics);
+});
 
 // Middleware
 app.use(express.json());

@@ -9,19 +9,24 @@ import {
   TokenHolderSnapshot,
   AccountTokenSnapshot
 } from './utils';
+import { updateDataTimestamp } from './metrics';
+import sfMeta from '@superfluid-finance/metadata';
+import type { NetworkMetaData } from '@superfluid-finance/metadata/module/networks/list';
 
 // In-memory cache of token holders
-const tokenHoldersCache: Record<string, TokenHolderSnapshot> = {};
+export const tokenHoldersCache: Record<string, TokenHolderSnapshot> = {};
 
 // Take a snapshot of token holders for a specific token on a specific chain
 export async function takeSnapshot(
-  chainName: string,
+  network: NetworkMetaData,
   tokenAddress: string,
   rpcBatchSize: number = 100
 ): Promise<void> {
-  console.log(`--- Taking snapshot: ${chainName}: ${tokenAddress} ---`);
+  console.log(`--- Taking snapshot: ${network.name}: ${tokenAddress} ---`);
   
   try {
+    const chainId = network.chainId;
+    const chainName = network.name;
     const subgraphUrl = getSubgraphUrl(chainName);
     
     // Fetch all token holders from the subgraph - we still need this for netFlowRate info
@@ -54,7 +59,8 @@ export async function takeSnapshot(
       (response) => response.data.data.accountTokenSnapshots || [],
       // Return the item as is
       (item) => item,
-      subgraphUrl
+      subgraphUrl,
+      chainId
     );
     
     console.log(`Found ${snapshots.length} account token snapshots`);
@@ -115,7 +121,8 @@ export async function takeSnapshot(
           rpcClient,
           tokenAddress,
           accountsNeedingRpc,
-          rpcBatchSize
+          rpcBatchSize,
+          chainId
         );
         
         rpcBalances = rpcResult.balances;
@@ -177,6 +184,21 @@ export async function takeSnapshot(
     
     // Save to file
     saveTokenHolders(chainName, tokenAddress, nonZeroHolders, blockNumber);
+    
+    // Update data timestamp metrics - record when snapshot was completed
+    console.log(`Updating data timestamp metrics for chainId: ${chainId}, token: ${tokenAddress}`);
+    // Get token symbol from config
+    const config = require('./config').config;
+    const tokenInfo = Object.values(config).find((chainConfig: any) => 
+      (chainConfig as any)?.tokens?.some((token: any) => token.address === tokenAddress.toLowerCase())
+    ) as any;
+    const tokenSymbol = tokenInfo?.tokens?.find((token: any) => token.address === tokenAddress.toLowerCase())?.symbol || 'unknown';
+    
+    console.log(`Found token symbol: ${tokenSymbol}`);
+    // Record the timestamp when this snapshot was completed
+    updateDataTimestamp(chainId, tokenSymbol, Math.floor(Date.now() / 1000));
+    console.log('Data timestamp metrics updated');
+    
     console.log(`Snapshot completed and saved.`);
   } catch (error) {
     console.error(`Error taking snapshot: ${error instanceof Error ? error.message : String(error)}`);

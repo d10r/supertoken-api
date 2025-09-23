@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import { app } from './api';
-import { takeSnapshot, updateTokenHoldersCache } from './snapshot';
+import { takeSnapshot, updateTokenHoldersCache, tokenHoldersCache } from './snapshot';
 import { loadTokenHolders } from './utils';
 import sfMeta from '@superfluid-finance/metadata';
 import { config, initializeConfig, supportedChainIds } from './config';
@@ -124,7 +124,8 @@ async function loadInitialData(): Promise<void> {
     for (let i = 0; i < tokensToUpdate.length; i++) {
       const token = tokensToUpdate[i];
       console.log(`\n[${i+1}/${tokensToUpdate.length}] Updating ${token.symbol} on ${token.networkName}`);
-      await takeSnapshot(token.networkName, token.address, RPC_BATCH_SIZE);
+      const network = sfMeta.getNetworkByName(token.networkName)!;
+      await takeSnapshot(network, token.address, RPC_BATCH_SIZE);
     }
     
     console.log(`\n=== Data Updates Complete ===`);
@@ -134,7 +135,7 @@ async function loadInitialData(): Promise<void> {
 }
 
 // Take snapshots for all tokens
-async function takeSnapshots(): Promise<void> {
+async function updateSnapshots(): Promise<void> {
   console.log('Taking snapshots...');
   
   for (const [chainIdStr, chainConfig] of Object.entries(config)) {
@@ -142,7 +143,8 @@ async function takeSnapshots(): Promise<void> {
     const networkName = getNetworkName(chainId);
     
     for (const token of chainConfig.tokens) {
-      await takeSnapshot(networkName, token.address, RPC_BATCH_SIZE);
+      const network = sfMeta.getNetworkByName(networkName)!;
+      await takeSnapshot(network, token.address, RPC_BATCH_SIZE);
     }
   }
 }
@@ -159,7 +161,7 @@ async function start(): Promise<void> {
   
   // Setup periodic updates with setInterval
   console.log(`Scheduling snapshots every ${UPDATE_INTERVAL} seconds`);
-  setInterval(takeSnapshots, UPDATE_INTERVAL * 1000);
+  setInterval(updateSnapshots, UPDATE_INTERVAL * 1000);
 }
 
 // Start the application

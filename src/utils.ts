@@ -4,6 +4,7 @@ import axios from 'axios';
 import sfMeta from '@superfluid-finance/metadata';
 import { createPublicClient, http, type PublicClient, getContract } from 'viem';
 import { parseAbi } from 'viem';
+import { recordSubgraphQuery, recordRpcCall } from './metrics';
 
 // ERC20 ABI for balanceOf call
 const ERC20_ABI = parseAbi([
@@ -72,46 +73,59 @@ export async function queryAllPages<T>(
   queryFn: (lastId: string) => string,
   toItems: (response: any) => any[],
   itemFn: (item: any) => T,
-  graphqlEndpoint: string
+  graphqlEndpoint: string,
+  chainId?: number
 ): Promise<T[]> {
-  let lastId = "";
-  const items: T[] = [];
-  const pageSize = 1000;
+  const startTime = Date.now();
+  let success = false;
+  
+  try {
+    let lastId = "";
+    const items: T[] = [];
+    const pageSize = 1000;
 
-  while (true) {
-    const response = await axios.post(graphqlEndpoint, {
-      query: queryFn(lastId)
-    });
+    while (true) {
+      const response = await axios.post(graphqlEndpoint, {
+        query: queryFn(lastId)
+      });
 
-    // Check for GraphQL errors in response
-    if (response.data.errors) {
-      throw new Error(`GraphQL errors: ${JSON.stringify(response.data.errors)}`);
+      // Check for GraphQL errors in response
+      if (response.data.errors) {
+        throw new Error(`GraphQL errors: ${JSON.stringify(response.data.errors)}`);
+      }
+
+      // Check for malformed response structure
+      if (!response.data || !response.data.data) {
+        throw new Error('Malformed subgraph response: missing data field');
+      }
+
+      const newItems = toItems(response);
+
+      // Check if toItems returned null/undefined (indicating malformed data)
+      if (!Array.isArray(newItems)) {
+        throw new Error(`Subgraph response data is not an array: ${typeof newItems}`);
+      }
+
+      items.push(...newItems.map(itemFn));
+
+      if (newItems.length < pageSize) {
+        break;
+      } else {
+        lastId = newItems[newItems.length - 1].id;
+      }
+      process.stdout.write(".");
     }
-
-    // Check for malformed response structure
-    if (!response.data || !response.data.data) {
-      throw new Error('Malformed subgraph response: missing data field');
+    console.log("");
+    
+    success = true;
+    return items;
+  } finally {
+    // Record metrics if chainId is provided
+    if (chainId) {
+      const duration = (Date.now() - startTime) / 1000;
+      recordSubgraphQuery(chainId, duration, success);
     }
-
-    const newItems = toItems(response);
-
-    // Check if toItems returned null/undefined (indicating malformed data)
-    if (!Array.isArray(newItems)) {
-      throw new Error(`Subgraph response data is not an array: ${typeof newItems}`);
-    }
-
-    items.push(...newItems.map(itemFn));
-
-    if (newItems.length < pageSize) {
-      break;
-    } else {
-      lastId = newItems[newItems.length - 1].id;
-    }
-    process.stdout.write(".");
   }
-  console.log("");
-
-  return items;
 }
 
 // Batch fetch balances via RPC
@@ -119,87 +133,100 @@ export async function batchFetchBalances(
   client: PublicClient,
   tokenAddress: string,
   accounts: string[],
-  batchSize: number
+  batchSize: number,
+  chainId?: number
 ): Promise<{ 
   balances: Record<string, string>, 
   blockNumber: number,
   stats: { totalTime: number, batchCount: number, maxBatchTime: number }
 }> {
-  const balances: Record<string, string> = {};
+  const startTime = Date.now();
+  let success = false;
   
-  let totalTime = 0;
-  let maxBatchTime = 0;
-  let batchCount = 0;
-  let blockNumber = 0;
-  
-  // Create an ERC20 contract instance
-  const erc20Contract = getContract({
-    address: tokenAddress as `0x${string}`,
-    abi: ERC20_ABI,
-    client
-  });
-  
-  // Get current block number first to ensure atomicity
   try {
-    blockNumber = Number(await client.getBlockNumber());
-  } catch (error) {
-    console.error('Failed to get block number:', error);
-    throw new Error('Could not get current block number');
-  }
-  
-  // Process in batches
-  const totalBatches = Math.ceil(accounts.length / batchSize);
-  process.stdout.write(`Fetching balances at block ${blockNumber} - ${totalBatches} batches of ${batchSize}`);
-  
-  for (let i = 0; i < accounts.length; i += batchSize) {
-    batchCount++;
-    const batchAccounts = accounts.slice(i, i + batchSize);
-    const batchStart = performance.now();
+    const balances: Record<string, string> = {};
     
+    let totalTime = 0;
+    let maxBatchTime = 0;
+    let batchCount = 0;
+    let blockNumber = 0;
+    
+    // Create an ERC20 contract instance
+    const erc20Contract = getContract({
+      address: tokenAddress as `0x${string}`,
+      abi: ERC20_ABI,
+      client
+    });
+    
+    // Get current block number first to ensure atomicity
     try {
-      // Make batch call to balanceOf for all accounts in this batch
-      const batchResults = await Promise.all(
-        batchAccounts.map(account => 
-          erc20Contract.read.balanceOf(
-            [account as `0x${string}`], 
-            { blockNumber: BigInt(blockNumber) }
-          )
-          .then(balance => ({ account, balance: balance.toString() }))
-          .catch(err => {
-            console.error(`Error fetching balance for ${account}:`, err);
-            throw err; // Let viem's retry handle this
-          })
-        )
-      );
-      
-      // Calculate batch time
-      const batchTime = performance.now() - batchStart;
-      totalTime += batchTime;
-      maxBatchTime = Math.max(maxBatchTime, batchTime);
-      
-      // Add results to balances map
-      batchResults.forEach(result => {
-        balances[result.account] = result.balance;
-      });
-      
-      process.stdout.write(".");
+      blockNumber = Number(await client.getBlockNumber());
     } catch (error) {
-      console.error(`Failed to process batch ${batchCount}/${totalBatches}`);
-      process.stdout.write("x");
+      console.error('Failed to get block number:', error);
+      throw new Error('Could not get current block number');
+    }
+    
+    // Process in batches
+    const totalBatches = Math.ceil(accounts.length / batchSize);
+    process.stdout.write(`Fetching balances at block ${blockNumber} - ${totalBatches} batches of ${batchSize}`);
+    
+    for (let i = 0; i < accounts.length; i += batchSize) {
+      batchCount++;
+      const batchAccounts = accounts.slice(i, i + batchSize);
+      const batchStart = performance.now();
+      
+      try {
+        // Make batch call to balanceOf for all accounts in this batch
+        const batchResults = await Promise.all(
+          batchAccounts.map(account => 
+            erc20Contract.read.balanceOf(
+              [account as `0x${string}`], 
+              { blockNumber: BigInt(blockNumber) }
+            )
+            .then(balance => ({ account, balance: balance.toString() }))
+            .catch(err => {
+              console.error(`Error fetching balance for ${account}:`, err);
+              throw err; // Let viem's retry handle this
+            })
+          )
+        );
+        
+        // Calculate batch time
+        const batchTime = performance.now() - batchStart;
+        totalTime += batchTime;
+        maxBatchTime = Math.max(maxBatchTime, batchTime);
+        
+        // Add results to balances map
+        batchResults.forEach(result => {
+          balances[result.account] = result.balance;
+        });
+        
+        process.stdout.write(".");
+      } catch (error) {
+        console.error(`Failed to process batch ${batchCount}/${totalBatches}`);
+        process.stdout.write("x");
+      }
+    }
+    
+    console.log("");
+    
+    success = true;
+    return { 
+      balances,
+      blockNumber,
+      stats: {
+        totalTime,
+        batchCount,
+        maxBatchTime
+      }
+    };
+  } finally {
+    // Record metrics if chainId is provided
+    if (chainId) {
+      const duration = (Date.now() - startTime) / 1000;
+      recordRpcCall(chainId, duration, success);
     }
   }
-  
-  console.log("");
-  
-  return { 
-    balances,
-    blockNumber,
-    stats: {
-      totalTime,
-      batchCount,
-      maxBatchTime
-    }
-  };
 }
 
 // Calculate net flow rate from an account token snapshot
