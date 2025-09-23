@@ -23,6 +23,7 @@ async function fetchTokenList(): Promise<SuperTokenList> {
     }
     
     const tokenList: SuperTokenList = await response.json();
+    console.log(`Fetched list of ${tokenList.tokens.length} tokens`);
     
     // Validate the response structure
     if (!tokenList.tokens || !Array.isArray(tokenList.tokens)) {
