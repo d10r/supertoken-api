@@ -94,7 +94,6 @@ npm start
 Configure the application by setting the following environment variables in the `.env` file:
 
 - `CHAINS`: Comma-separated list of supported chains (network names from @superfluid-finance/metadata)
-- `TOKENS_BASE_MAINNET`: Comma-separated list of token addresses for Base Mainnet (currently only Base Mainnet is supported for token monitoring)
 - `UPDATE_INTERVAL`: Snapshot update interval in seconds (default: 3600 = every hour)
 - `PORT`: Port for the API server (default: 3000)
 - `RPC_BATCH_SIZE`: Number of accounts to include in each RPC batch call for balance verification (default: 100)
